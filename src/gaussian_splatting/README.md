@@ -1,0 +1,1 @@
+## Repo for Improved 2D and 3D Gaussian Splatting
