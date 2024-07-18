@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>kinova_control</name>
+  <name>gaussian_splatting</name>
   <version>0.0.1</version>
-  <description>The kinova_control package</description>
+  <description>The gaussian_splatting package</description>
 
   <!-- One maintainer tag required, multiple allowed, one person per tag -->
   <!-- Example:  -->
@@ -49,11 +49,8 @@
   <!-- Use doc_depend for packages you need only for building documentation: -->
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
-  <build_depend>moveit_commander</build_depend>
   <build_depend>rospy</build_depend>
-  <build_export_depend>moveit_commander</build_export_depend>
   <build_export_depend>rospy</build_export_depend>
-  <exec_depend>moveit_commander</exec_depend>
   <exec_depend>rospy</exec_depend>
 
 
