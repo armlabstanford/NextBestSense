@@ -56,8 +56,6 @@ from std_srvs.srv import Empty
 from scipy.spatial.transform import Rotation as sciR
 
 from kinova_control_py.pose_util import RandomPoseGenerator
-from gaussian_splatting_py import SplatFacto2d
-
 
 import kdl_parser_py.urdf as kdl_parser
 import PyKDL
@@ -203,10 +201,9 @@ def main():
     rospy.loginfo("Reaching Named Target Home...")
     success &= example.reach_named_position("home")
     print(success)
-  
-  for _ in range(12):
-    import pdb; pdb.set_trace()
-    pose = example.pose_generator.sampleSphere(OBJECT_CENTER, 0.2)
+
+  for _ in range(10):
+    pose = example.pose_generator.sampleSphere(0.2, OBJECT_CENTER)
     joints = example.pose_generator.calcIK(pose)
     print(joints)
 
@@ -228,17 +225,6 @@ def main():
         success &= example.reach_joint_angles(joints)
       except:
         rospy.logwarn("Fail to Execute")
-
-  # if success:
-  #   rospy.loginfo("Reaching Cartesian Pose...")
-  #   success &= example.reach_cartesian_pose(pose=TOPVIEW, tolerance=0.01, constraints=None)
-  #   print(success)
-
-  # # For testing purposes
-  # rospy.set_param("/kortex_examples_test_results/moveit_general_python", success)
-
-  # if not success:
-  #     rospy.logerr("The example encountered an error.")
 
 if __name__ == '__main__':
   main()

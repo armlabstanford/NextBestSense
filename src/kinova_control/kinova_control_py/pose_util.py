@@ -184,34 +184,58 @@ class RandomPoseGenerator(PoseSolver):
                 cache_size=100 ):
         super().__init__(base_name, ee_name, cache_size)
 
-    def sampleSphere(self, center_pos, radius):
-        """ Sample a point on the sphere with given center and radius """
-        # sample a point on the sphere
-        theta = np.pi / 2 + self.rng.random() * np.pi
-        phi = self.rng.random() * np.pi / 6 + np.pi / 3
-        offset = np.array([radius * np.sin(phi) * np.cos(theta), radius * np.sin(phi) * np.sin(theta), radius * np.cos(phi)])
-        pos = center_pos + offset
-
-        # compute the orientation
-        vec_z = -1 * offset / np.linalg.norm(offset)
+    def sampleSphere(self, radius, center_pos,
+                     min_phi = 0., max_phi = np.pi / 4,
+                     min_theta = np.pi / 2, max_theta = 3 * np.pi / 2):
+      """ Sample a point on the sphere with given center and radius 
+      
+      Args:
+        radius (float): The radius of the sphere
+        center_pos (np.ndarray): The center position of the sphere
+        angle phi: 0 - up, pi / 2 - horizontal
+        angle theta: 0 - front, pi - back
+      """
+      # sample a point on the sphere
+      theta = min_theta + self.rng.random() * (max_theta - min_theta)
+      phi = min_phi + self.rng.random() * (max_phi - min_phi)
         
-        # y axis is horizontal
-        vec_y = np.array([1, -vec_z[0] / vec_z[1], 0])
-        vec_y = vec_y / np.linalg.norm(vec_y)
+      return self.poseOnSphere(theta, phi, radius, center_pos)
 
-        # x_axis
-        vec_x = np.cross(vec_y, vec_z)
+    def poseOnSphere(self, theta, phi, radius, center_pos):
+      """ generate a pose on the sphere
+      
+      Args:
+        radius (float): The radius of the sphere
+        center_pos (np.ndarray): The center position of the sphere
+        angle phi: 0 - up, pi / 2 - horizontal
+        angle theta: 0 - front, pi - back
+      """
+      offset = np.array([radius * np.sin(phi) * np.cos(theta), radius * np.sin(phi) * np.sin(theta), radius * np.cos(phi)])
+      pos = center_pos + offset
 
-        if vec_x[2] > 0:
-            vec_x = -vec_x
-            vec_y = -vec_y
+      # compute the orientation
+      vec_z = -1 * offset / np.linalg.norm(offset)
+      
+      # y axis is horizontal
+      if np.isnan(vec_z[0] / vec_z[1]):
+        vec_x = np.array([0, 1., 0.])
+      else:
+        vec_x = np.array([1, -vec_z[0] / vec_z[1], 0])
+        vec_x = vec_x / np.linalg.norm(vec_x)
 
-        R_matrix = np.stack([vec_x, vec_y, vec_z], axis=1)
+      # x_axis
+      vec_y = np.cross(vec_z, vec_x)
 
-        # get the quaternion
-        quat = sciR.from_matrix(R_matrix).as_quat()    
-        pose = np.concatenate((pos, quat))
+      if vec_y[2] < 0:
+          vec_x = -vec_x
+          vec_y = -vec_y
 
-        return pose
+      R_matrix = np.stack([vec_x, vec_y, vec_z], axis=1)
+
+      # get the quaternion
+      quat = sciR.from_matrix(R_matrix).as_quat()    
+      pose = np.concatenate((pos, quat))
+
+      return pose
 
     
