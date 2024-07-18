@@ -50,6 +50,7 @@
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>moveit_commander</build_depend>
+  <build_depend>message_generation</build_depend>
   <build_depend>rospy</build_depend>
   <build_export_depend>moveit_commander</build_export_depend>
   <build_export_depend>rospy</build_export_depend>
