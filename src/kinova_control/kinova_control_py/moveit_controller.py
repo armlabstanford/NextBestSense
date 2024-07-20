@@ -52,9 +52,10 @@ import numpy as np
 from pyquaternion import Quaternion
 from geometry_msgs.msg import PoseStamped, Pose
 from math import pi
-from std_srvs.srv import Empty
-from scipy.spatial.transform import Rotation as sciR
+from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
+from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest
 
+from scipy.spatial.transform import Rotation as sciR
 from kinova_control_py.pose_util import RandomPoseGenerator
 
 import kdl_parser_py.urdf as kdl_parser
@@ -104,6 +105,18 @@ class ExampleMoveItTrajectories(object):
       self.is_init_success = True
 
     self.pose_generator = RandomPoseGenerator()
+
+    # wait for vision node service
+    rospy.loginfo("Waiting for Vision Node Services...")
+    rospy.wait_for_service("/add_view")
+    rospy.wait_for_service("/next_best_view")
+    rospy.wait_for_service("/save_model")
+
+    self.add_view_client = rospy.ServiceProxy("/add_view", Trigger)
+    self.nbv_client = rospy.ServiceProxy("/next_best_view", NBV)
+    self.save_model_client = rospy.ServiceProxy("/save_model", Trigger)
+
+    rospy.loginfo("Vision Node Services are available")
 
   def reach_named_position(self, target):
     arm_group = self.arm_group
@@ -174,57 +187,139 @@ class ExampleMoveItTrajectories(object):
       return val
     except:
       return False 
+    
+  def send_req_helper(self, client, req):
+    """ Send request helper """
+    while True:
+      res = client(req)
 
-def main():
-  example = ExampleMoveItTrajectories()
+      if res.success:
+        break
+      else:
+        # error analysis
+        error_code = int(res.message.split(":")[0].split(" ")[2])
 
-  # For testing purposes
-  success = example.is_init_success
-  try:
-      rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
-  except:
-      pass
-  
-  sample_pose = rospy.Publisher("/sample_pose", PoseStamped, queue_size=1, latch=True)
+        if error_code in [2, 3]:
+          rospy.logwarn(res.message)
+          exit()
+        elif error_code == 1:
+          # wait for training loop to be finised
+          rospy.loginfo(res.message)
+          rospy.sleep(1)
+        else:
+          raise NotImplementedError("Error Code {} not implemented".format(error_code))
+        
+    return res
 
-  # if success:
-  #   rospy.loginfo("Reaching Named Target Vertical...")
-  #   success &= example.reach_named_position("vertical")
-  #   print (success)
-  
-  # if success:
-  #   rospy.loginfo("Reaching Joint Angles...")  
-  #   success &= example.reach_joint_angles(tolerance=0.01) #rad
-  #   print (success)
-  
-  if success:
-    rospy.loginfo("Reaching Named Target Home...")
-    success &= example.reach_named_position("home")
-    print(success)
-
-  for _ in range(10):
-    pose = example.pose_generator.sampleSphere(0.2, OBJECT_CENTER)
-    joints = example.pose_generator.calcIK(pose)
-    print(joints)
-
+  def convertNumpy2PoseStamped(self, pose:np.ndarray) -> PoseStamped:
     pose_msg = PoseStamped()
+    # relative to world
     pose_msg.header.frame_id = "base_link"
     pose_msg.header.stamp = rospy.Time.now()
 
-    pose_msg.pose.position.x = pose[0]
-    pose_msg.pose.position.y = pose[1]
-    pose_msg.pose.position.z = pose[2]
-    pose_msg.pose.orientation.x = pose[3]
-    pose_msg.pose.orientation.y = pose[4]
-    pose_msg.pose.orientation.z = pose[5]
-    pose_msg.pose.orientation.w = pose[6]
-    sample_pose.publish(pose_msg)
+    # convert R7 to msg
+    if pose.ndim == 1:
+      pose_msg.pose.position.x = pose[0]
+      pose_msg.pose.position.y = pose[1]
+      pose_msg.pose.position.z = pose[2]
+      pose_msg.pose.orientation.x = pose[3]
+      pose_msg.pose.orientation.y = pose[4]
+      pose_msg.pose.orientation.z = pose[5]
+      pose_msg.pose.orientation.w = pose[6]
+    
+    # convert 4x4 to msg
+    elif pose.ndim == 2:
+      pose_msg.pose.position.x = pose[0, 3]
+      pose_msg.pose.position.y = pose[1, 3]
+      pose_msg.pose.position.z = pose[2, 3]
 
-    if joints is not None:
-      try:
-        success &= example.reach_joint_angles(joints)
-      except:
-        rospy.logwarn("Fail to Execute")
+      Rot = sciR.from_matrix(pose[:3, :3])
+      quat = Rot.as_quat()
+
+      pose_msg.pose.orientation.x = quat[0]
+      pose_msg.pose.orientation.y = quat[1]
+      pose_msg.pose.orientation.z = quat[2]
+      pose_msg.pose.orientation.w = quat[3]
+
+    return pose_msg
+    
+  def run(self):
+    """ Run Method (Main Thread) """
+    # For testing purposes
+    success = self.is_init_success
+    try:
+        rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
+    except:
+        pass
+    
+    sample_pose = rospy.Publisher("/sample_pose", PoseStamped, queue_size=1, latch=True)
+  
+    if success:
+      rospy.loginfo("Reaching Named Target Home...")
+      success &= self.reach_named_position("home")
+      print(success)
+
+    for _ in range(3):
+      req = TriggerRequest()
+      self.send_req_helper(self.add_view_client, req)
+      
+      # Next Best View
+      pose_req = NBVRequest()
+      candidate_joints = []
+      # Sample views near the sphere
+      pose_cnt = 0
+      while pose_cnt < 10:
+        pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.1, 0.4)
+        joints = self.pose_generator.calcIK(pose) 
+
+        # make plans to reach the pose
+        success, trajector, planning_time, err_code = self.arm_group.plan(joints)
+
+        if success:
+          pose_cnt += 1
+
+          # convert to Pose message
+          pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+          pose_req.poses.append(pose_msg)
+          candidate_joints.append(joints)
+
+      # send the request
+      res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+      score = np.array(res.scores)
+      max_idx = np.argmax(score)
+
+      # reach the best view
+      joints = candidate_joints[max_idx]
+      if joints is not None:
+        try:
+          success &= self.reach_joint_angles(joints)
+        except:
+          rospy.logwarn("Fail to Execute")
+
+      # publish sampled pose
+      pose_msg = PoseStamped()
+      pose_msg.header.frame_id = "base_link"
+      pose_msg.header.stamp = rospy.Time.now()
+      pose_msg.pose.position.x = pose[0]
+      pose_msg.pose.position.y = pose[1]
+      pose_msg.pose.position.z = pose[2]
+      pose_msg.pose.orientation.x = pose[3]
+      pose_msg.pose.orientation.y = pose[4]
+      pose_msg.pose.orientation.z = pose[5]
+      pose_msg.pose.orientation.w = pose[6]
+      sample_pose.publish(pose_msg)
+
+    # Save the model
+    rospy.loginfo("Save Model ...")
+    req = TriggerRequest()
+    self.send_req_helper(self.save_model_client, req)
+
+    return success
+
+def main():
+  example = ExampleMoveItTrajectories()
+  import pdb; pdb.set_trace()
+  example.run()
 
 if __name__ == '__main__':
   main()

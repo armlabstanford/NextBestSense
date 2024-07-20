@@ -1,0 +1,14 @@
+<launch>
+
+    <arg name="image_topic" default="/image" />
+    <arg name="cam_info_topic" default="/cam_info" />
+    <arg name="save_data" default="False" />
+
+    <!-- Launch the example in that namespace -->
+    <node name="vision_node" pkg="gaussian_splatting" type="vision_node.py" output="screen">
+        <param name="image_topic" value="$(arg image_topic)"/>
+        <param name="cam_info_topic" value="$(arg cam_info_topic)"/>
+        <param name="save_data" value="$(arg save_data)"/>
+    </node>
+
+</launch>

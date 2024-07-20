@@ -184,7 +184,7 @@ class RandomPoseGenerator(PoseSolver):
                 cache_size=100 ):
         super().__init__(base_name, ee_name, cache_size)
 
-    def sampleSphere(self, radius, center_pos,
+    def sampleOnSphere(self, radius, center_pos,
                      min_phi = 0., max_phi = np.pi / 4,
                      min_theta = np.pi / 2, max_theta = 3 * np.pi / 2):
       """ Sample a point on the sphere with given center and radius 
@@ -200,6 +200,15 @@ class RandomPoseGenerator(PoseSolver):
       phi = min_phi + self.rng.random() * (max_phi - min_phi)
         
       return self.poseOnSphere(theta, phi, radius, center_pos)
+    
+    def sampleInSphere(self, center_pos,
+                       min_radius = 0.01, max_radius = 0.1,
+                     min_phi = 0., max_phi = np.pi / 4,
+                     min_theta = np.pi / 2, max_theta = 3 * np.pi / 2):
+      """ Sample the pose within the sphere """
+
+      radius = min_radius + self.rng.random() * (max_radius - min_radius)
+      return self.sampleOnSphere(radius, center_pos, min_phi, max_phi, min_theta, max_theta)
 
     def poseOnSphere(self, theta, phi, radius, center_pos):
       """ generate a pose on the sphere

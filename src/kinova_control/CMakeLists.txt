@@ -8,7 +8,7 @@ project(kinova_control)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
-  roscpp rospy std_msgs message_generation actionlib_msgs actionlib
+  roscpp rospy std_msgs message_generation actionlib_msgs actionlib gaussian_splatting
 )
 
 ## System dependencies are found with CMake's conventions

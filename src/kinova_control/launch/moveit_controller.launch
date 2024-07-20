@@ -4,7 +4,18 @@
     <arg name="robot_name" default="my_gen3"/>
     <arg name="start_delay_seconds" default="0"/>
 
-    <!-- Launch the example in that namespace -->
+    <arg name="image_topic" default="/camera/color/image_raw" />
+    <arg name="cam_info_topic" default="/camera/color/camera_info" />
+    <arg name="save_data" default="True" />
+
+    <!-- include other launch file -->
+    <include file="$(find gaussian_splatting)/launch/vision.launch">
+        <arg name="image_topic" value="$(arg image_topic)"/>
+        <arg name="cam_info_topic" value="$(arg cam_info_topic)"/>
+        <arg name="save_data" value="$(arg save_data)"/>
+    </include>
+
+    <!-- Launch the controller node -->
     <node name="moveit_controller" pkg="kinova_control" type="moveit_controller.py" ns="$(arg robot_name)" output="screen" launch-prefix="bash -c 'sleep $(arg start_delay_seconds); $0 $@' "/>
 
 </launch>
