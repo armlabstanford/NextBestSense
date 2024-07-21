@@ -28,6 +28,10 @@ class VisionNode(object):
         self.cam_info_topic = rospy.get_param("~cam_info_topic", "/camera_info")
         self.save_data = rospy.get_param("~save_data", "False")
         self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/Documents/data")
+        
+        # training thread
+        self.training_thread = threading.Thread(target=self.training_loop)
+        
         rospy.loginfo("Camera Topic: {}".format(self.CAMERA_TOPC))
         rospy.loginfo("Save Data: {}".format(self.save_data))
         rospy.loginfo("Save Data Dir: {}".format(self.save_data_dir))
@@ -51,10 +55,6 @@ class VisionNode(object):
         self.listener = tf2.TransformListener(self.tfBuffer)
 
         # TODO initialize the radiance field
-
-
-        # training thread
-        self.training_thread = threading.Thread(target=self.training_loop)
 
         rospy.loginfo("Vision Node Initialized")
 
@@ -258,17 +258,17 @@ class VisionNode(object):
     def training_loop(self):
         """ Train the Radiance Field """
         rospy.sleep(5)
+        rospy.loginfo("Training Gaussian Splatting")
         pass
 
     def EvaluatePoses(self, poses:np.ndarray) -> np.ndarray:
         """ Evaluate poses  """
         
-        # TODO update to query GS to get scores for each pose
+        # TODO go through each pose, check the Fisher Information, and select the best view
         return np.random.rand(poses.shape[0])
 
     def saveModel(self):
         """ Save the model  """
-        
         pass
 
 
