@@ -92,6 +92,15 @@ class ExampleMoveItTrajectories(object):
       self.display_trajectory_publisher = rospy.Publisher(rospy.get_namespace() + 'move_group/display_planned_path',
                                                     moveit_msgs.msg.DisplayTrajectory,
                                                     queue_size=20)
+      
+      box_pose = geometry_msgs.msg.PoseStamped()
+      box_pose.pose.orientation.w = 1.0
+      box_pose.pose.position.x = OBJECT_CENTER[0]
+      box_pose.pose.position.y = OBJECT_CENTER[1]
+      box_pose.pose.position.z = OBJECT_CENTER[2]
+      box_pose.header.frame_id = 'tool_frame'
+      box_name = "box"
+      self.scene.add_box(box_name, box_pose, size=(0.1, 0.1, 0.1))
 
       if self.is_gripper_present:
         gripper_group_name = "gripper"
@@ -275,6 +284,7 @@ class ExampleMoveItTrajectories(object):
         # make plans to reach the pose
         success, trajector, planning_time, err_code = self.arm_group.plan(joints)
 
+        # if plan succeeds (with box), we can add the pose as valid
         if success:
           pose_cnt += 1
 
@@ -283,7 +293,7 @@ class ExampleMoveItTrajectories(object):
           pose_req.poses.append(pose_msg)
           candidate_joints.append(joints)
 
-      # send the request
+      # send the request for next best view
       res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
       score = np.array(res.scores)
       max_idx = np.argmax(score)
@@ -294,7 +304,7 @@ class ExampleMoveItTrajectories(object):
         try:
           success &= self.reach_joint_angles(joints)
         except:
-          rospy.logwarn("Fail to Execute")
+          rospy.logwarn("Fail to Execute Joint Trajectory")
 
       # publish sampled pose
       pose_msg = PoseStamped()

@@ -263,7 +263,7 @@ class VisionNode(object):
     def EvaluatePoses(self, poses:np.ndarray) -> np.ndarray:
         """ Evaluate poses  """
         
-        # TODO update
+        # TODO update to query GS to get scores for each pose
         return np.random.rand(poses.shape[0])
 
     def saveModel(self):
