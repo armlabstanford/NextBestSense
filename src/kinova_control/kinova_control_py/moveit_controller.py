@@ -65,6 +65,7 @@ from typing import List
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
+BOX_DIMS = (0.1, 0.1, 0.1)
 
 class ExampleMoveItTrajectories(object):
   """ExampleMoveItTrajectories"""
@@ -98,9 +99,10 @@ class ExampleMoveItTrajectories(object):
       box_pose.pose.position.x = OBJECT_CENTER[0]
       box_pose.pose.position.y = OBJECT_CENTER[1]
       box_pose.pose.position.z = OBJECT_CENTER[2]
-      box_pose.header.frame_id = 'tool_frame'
+      box_pose.header.frame_id = 'base_link'
       box_name = "box"
-      self.scene.add_box(box_name, box_pose, size=(0.1, 0.1, 0.1))
+      # add box to the scene. In the future, resize to object size in GS
+      self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
 
       if self.is_gripper_present:
         gripper_group_name = "gripper"
@@ -114,6 +116,7 @@ class ExampleMoveItTrajectories(object):
       self.is_init_success = True
 
     self.pose_generator = RandomPoseGenerator()
+    self.num_poses = 10
 
     # wait for vision node service
     rospy.loginfo("Waiting for Vision Node Services...")
@@ -275,16 +278,17 @@ class ExampleMoveItTrajectories(object):
       # Next Best View
       pose_req = NBVRequest()
       candidate_joints = []
-      # Sample views near the sphere
+      # Sample views near the sphere until we have 10 poses
       pose_cnt = 0
-      while pose_cnt < 10:
+      
+      while pose_cnt < self.num_poses:
         pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.1, 0.4)
         joints = self.pose_generator.calcIK(pose) 
 
         # make plans to reach the pose
         success, trajector, planning_time, err_code = self.arm_group.plan(joints)
 
-        # if plan succeeds (with box), we can add the pose as valid
+        # if plan succeeds (with box in scene), we can add the pose as valid
         if success:
           pose_cnt += 1
 
