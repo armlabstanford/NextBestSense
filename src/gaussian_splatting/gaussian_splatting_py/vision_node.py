@@ -16,7 +16,7 @@ import rospy
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest
 from geometry_msgs.msg import PoseStamped, Pose, Transform, TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
-from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest
+from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, NBVPoses, NBVPosesResponse, NBVPosesRequest, NBVResult, NBVResultRequest, NBVResultResponse
 
 class VisionNode(object):
 
@@ -40,6 +40,7 @@ class VisionNode(object):
         rospy.loginfo("Adding services")
         self.addview_srv = rospy.Service("add_view", Trigger, self.addVisionCb)
         self.nbv_srv = rospy.Service("next_best_view", NBV, self.NextBestView)
+        self.nbv_get_poses_srv = rospy.Service("get_poses", Trigger, self.getPosesCb)
         self.savemodel_srv = rospy.Service("save_model", Trigger, self.saveModelCb)
 
         # wait for image topic
@@ -50,6 +51,10 @@ class VisionNode(object):
         self.images: List[np.ndarray] = []
         # store original camera to world pose 
         self.poses: List[np.ndarray] = []
+        # store poses for next best view to send to GS
+        self.poses_for_nbv: List[np.ndarray] = []
+        
+        self.scores: List[float] = []
 
         self.tfBuffer = tf2.Buffer()
         self.listener = tf2.TransformListener(self.tfBuffer)
@@ -83,6 +88,7 @@ class VisionNode(object):
         c2w[:3, 3] = [transform.translation.x, transform.translation.y, transform.translation.z]
 
         return c2w
+    
     
     def saveModelCb(self, req) -> TriggerResponse:
         """ Save Model Callback """
@@ -172,15 +178,55 @@ class VisionNode(object):
             res.message = "Success"
         
         return res
+    
+    def getNBVPoses(self, req: NBVPosesRequest) -> NBVPosesResponse:
+        """ Get Next Best View Poses to send to GS
+
+        Args:
+            req (NBVPosesRequest): Request to get the next best view poses
+        Returns:
+            NBVPosesResponse: _description_
+        """
+        response = NBVPosesResponse()
+        
+        if len(self.poses_for_nbv) == 0:
+            # if there are no poses for next best view, return false so that GS continues training as is.
+            response.success = False
+            response.message = "No poses for Next Best View"
+            return response
+         
+        response.success = True
+        response.message = f"Sent {len(self.poses_for_nbv)} poses for Next Best View to GS."
+        response.poses = self.poses_for_nbv
+        
+        return response
+    
+    def receiveNBVScoresGS(self, req: NBVResultRequest) -> NBV:
+        """ Receive the NBV Scores from GS 
+        
+        """
+        response = NBVResultResponse()
+        if len(req.scores) == 0:
+            response.success = False
+            response.message = "No scores provided. GS will continue training."
+            return response
+        
+        response.success = True
+        response.message = "Successfully received scores from GS"
+        self.scores = req.scores
+        self.done = True
+        return response
 
     def NextBestView(self, req:NBVRequest) -> NBVResponse:
-        """ Next Best View Service Callback """
+        """ Next Best View Service Callback 
+            Waits for GS to be trained, then proceeds
+        """
         poses = req.poses
         res = NBVResponse()
 
         if len(poses) == 0:
             res.success = True
-            res.message = "Success"
+            res.message = "No-Op -- No poses provided"
             return None
 
         if self.training_thread.is_alive():
@@ -188,9 +234,7 @@ class VisionNode(object):
             res.message = "Error Code 1: Training thread is still running"
             return res
 
-        # convert to numpy array
-        poses_np = np.array([VisionNode.convertPose2Numpy(pose) for pose in poses]) # (N, 4, 4)
-        scores = self.EvaluatePoses(poses_np)
+        scores = self.EvaluatePoses(poses)
 
         # return response
         res.success = True
@@ -198,8 +242,10 @@ class VisionNode(object):
         res.scores = list(scores)
         return res
     
+    
     def save_images(self):
-        """ Save the captured images as a NeRF Synthetic Dataset format """
+        """ Save the captured images as a NeRF Synthetic Dataset format
+            When new views exist, """
         # get camera info
         
         # get the date format in Year-Month-Day-Hour-Minute-Second
@@ -255,17 +301,29 @@ class VisionNode(object):
         with open(json_file, "w") as f:
             json.dump(json_txt, f)
 
+
     def training_loop(self):
         """ Train the Radiance Field """
         rospy.sleep(5)
         rospy.loginfo("Training Gaussian Splatting")
-        pass
 
-    def EvaluatePoses(self, poses:np.ndarray) -> np.ndarray:
-        """ Evaluate poses  """
+    
+    def EvaluatePoses(self, poses:List[PoseStamped]) -> np.ndarray:
+        """ 
+        Evaluate poses
         
-        # TODO go through each pose, check the Fisher Information, and select the best view
-        return np.random.rand(poses.shape[0])
+        """
+        self.done = False
+        self.poses_for_nbv = poses
+        self.scores = []
+        rate = rospy.Rate(1)  # 1 Hz
+        # loop until GS hits 2k steps and requests a pose
+        while not rospy.is_shutdown() and not self.done:
+            rospy.loginfo("GS running...")
+            rate.sleep()
+            
+        # result is obtained, return the scores
+        return np.array(self.scores)
 
     def saveModel(self):
         """ Save the model  """

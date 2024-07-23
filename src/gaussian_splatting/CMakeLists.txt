@@ -55,6 +55,8 @@ catkin_python_setup()
 add_service_files(
   FILES
   NBV.srv
+  NBVPoses.srv
+  NBVResult.srv
 )
 
 ## Generate actions in the 'action' folder

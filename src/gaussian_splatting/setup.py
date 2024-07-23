@@ -15,7 +15,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Boshu Lei',
-    maintainer_email='sobrmesa121@gmial.com',
+    maintainer_email='sobrmesa121@gmail.com',
     description='Description of your ROS package',
     license='License declaration',
     tests_require=['pytest']

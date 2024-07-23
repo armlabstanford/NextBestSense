@@ -19,20 +19,7 @@
 #    contributors may be used to endorse or promote products derived
 #    from this software without specific prior written permission.
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
-# FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
-# COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-# ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-# POSSIBILITY OF SUCH DAMAGE.
-#
-# Author: Acorn Pooley, Mike Lautman
+# Author: Acorn Pooley, Mike Lautman, Boshu Lei, Matt Strong
 
 # Inspired from http://docs.ros.org/kinetic/api/moveit_tutorials/html/doc/move_group_python_interface/move_group_python_interface_tutorial.html
 # Modified by Alexandre Vannobel to test the FollowJointTrajectory Action Server for the Kinova Gen3 robot
@@ -254,7 +241,7 @@ class ExampleMoveItTrajectories(object):
       pose_msg.pose.orientation.w = quat[3]
 
     return pose_msg
-    
+  
   def run(self):
     """ Run Method (Main Thread) """
     # For testing purposes
@@ -298,6 +285,8 @@ class ExampleMoveItTrajectories(object):
           candidate_joints.append(joints)
 
       # send the request for next best view
+      # this call will block until the model is trained up to 2k steps
+      # other things can be done in the background if need be
       res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
       score = np.array(res.scores)
       max_idx = np.argmax(score)
