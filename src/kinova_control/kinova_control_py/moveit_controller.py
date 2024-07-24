@@ -40,7 +40,7 @@ from pyquaternion import Quaternion
 from geometry_msgs.msg import PoseStamped, Pose
 from math import pi
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
-from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest
+from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
 
 from scipy.spatial.transform import Rotation as sciR
 from kinova_control_py.pose_util import RandomPoseGenerator
@@ -113,7 +113,7 @@ class ExampleMoveItTrajectories(object):
 
     self.add_view_client = rospy.ServiceProxy("/add_view", Trigger)
     self.nbv_client = rospy.ServiceProxy("/next_best_view", NBV)
-    self.save_model_client = rospy.ServiceProxy("/save_model", Trigger)
+    self.save_model_client = rospy.ServiceProxy("/save_model", SaveModel)
 
     rospy.loginfo("Vision Node Services are available")
 
@@ -251,17 +251,26 @@ class ExampleMoveItTrajectories(object):
     except:
         pass
     
-    sample_pose = rospy.Publisher("/sample_pose", PoseStamped, queue_size=1, latch=True)
-  
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       print(success)
-
-    for _ in range(3):
-      req = TriggerRequest()
-      self.send_req_helper(self.add_view_client, req)
       
+      
+    start_views = 4
+    total_views_to_add = 10 
+    test_views = 15
+    view_type_ids = []
+    for i in range(start_views):
+      view_type_ids.append(0)
+    for i in range(total_views_to_add):
+      view_type_ids.append(1)
+    for i in range(test_views):
+      view_type_ids.append(2)
+      
+    total_iters = len(view_type_ids)
+
+    for i in range(total_iters):
       # Next Best View
       pose_req = NBVRequest()
       candidate_joints = []
@@ -284,34 +293,37 @@ class ExampleMoveItTrajectories(object):
           pose_req.poses.append(pose_msg)
           candidate_joints.append(joints)
 
-      # send the request for next best view
-      # this call will block until the model is trained up to 2k steps
-      # other things can be done in the background if need be
-      res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
-      score = np.array(res.scores)
-      max_idx = np.argmax(score)
+      if view_type_ids[i] == 0 or view_type_ids[i] == 2:
+        # choose random joints
+        joints = candidate_joints[np.random.randint(0, self.num_poses)]
+      elif view_type_ids[i] == 1:
+        # this is a train view, add it to the model
+        # send the request for next best view
+        # this call will block until the model is trained up to 2k steps
+        res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+        score = np.array(res.scores)
+        max_idx = np.argmax(score)
+        joints = candidate_joints[max_idx]
 
-      # reach the best view
-      joints = candidate_joints[max_idx]
+      # reach the view
       if joints is not None:
         try:
           success &= self.reach_joint_angles(joints)
+          
         except:
           rospy.logwarn("Fail to Execute Joint Trajectory")
 
-      # publish sampled pose
-      pose_msg = PoseStamped()
-      pose_msg.header.frame_id = "base_link"
-      pose_msg.header.stamp = rospy.Time.now()
-      pose_msg.pose.position.x = pose[0]
-      pose_msg.pose.position.y = pose[1]
-      pose_msg.pose.position.z = pose[2]
-      pose_msg.pose.orientation.x = pose[3]
-      pose_msg.pose.orientation.y = pose[4]
-      pose_msg.pose.orientation.z = pose[5]
-      pose_msg.pose.orientation.w = pose[6]
-      sample_pose.publish(pose_msg)
-
+        # Add the view
+        req = TriggerRequest()
+        self.send_req_helper(self.add_view_client, req)
+        
+        # train the model at the end of the first few views
+        if i >= start_views - 1:
+          rospy.loginfo("Saving Model with new pose ...")
+          req = SaveModelRequest()
+          req.success = success
+          self.send_req_helper(self.save_model_client, req)
+        
     # Save the model
     rospy.loginfo("Save Model ...")
     req = TriggerRequest()
