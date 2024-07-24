@@ -19,10 +19,7 @@ class Splatfacto3D(ROSSplatfacto):
         """
         print("Starting training")
         
-        command = f"""ns-train depth-splatfacto --data {self.data_dir} --pipeline.model.render_uncertainty {self.render_uncertainty}
-                --viewer.quit-on-train-completion True nerfstudio-data
-                 --train-split-fraction 0.5"""
-                 
+        command = f"""ns-train depth-splatfacto --data {self.data_dir} --pipeline.model.render_uncertainty {self.render_uncertainty} --viewer.quit-on-train-completion True nerfstudio-data --train-split-fraction 0.5"""
         # Open terminal and run GS training
         subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', command])
 
@@ -31,6 +28,6 @@ class Splatfacto3D(ROSSplatfacto):
     
 if __name__ == "__main__":
     # train on bunny blender example
-    data_dir = '/home/peasant98/Desktop/Touch-GS/touch-gs-data/bunny_blender_data'
+    data_dir = '/home/user/touch-gs-data/bunny_blender_data'
     splatfacto = Splatfacto3D(data_dir=data_dir)
     splatfacto.start_training()

@@ -5,8 +5,6 @@ ARMLab 2024
 from abc import ABC, abstractmethod
 import subprocess
 
-import rospy
-
 # future potential work: send poses to select for next best pose, resample around the top k poses to see if we can get a better view
 
 class ROSSplatfacto(ABC):
@@ -34,9 +32,7 @@ class ROSSplatfacto(ABC):
         self.depth_uncertainty_weight = depth_uncertainty_weight
         self.rgb_uncertainty_weight = rgb_uncertainty_weight
         
-        rospy.loginfo("Adding GS services")
         # service for Nerfstudio to get the list of poses
-        self.get_
         
         
     
