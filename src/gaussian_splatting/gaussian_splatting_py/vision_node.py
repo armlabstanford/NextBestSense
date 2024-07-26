@@ -3,6 +3,7 @@
 import os
 import datetime
 import os.path as osp
+from matplotlib import pyplot as plt
 import numpy as np
 import cv2
 import json
@@ -11,46 +12,70 @@ from typing import List, Union
 import tf2_ros as tf2
 from scipy.spatial.transform import Rotation as sciR
 
-import threading
 import rospy
+
+from cv_bridge import CvBridge
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest
 from geometry_msgs.msg import PoseStamped, Pose, Transform, TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
-from gaussian_splatting.gaussian_splatting_py.splatfacto3d import Splatfacto3D
+# from gaussian_splatting.gaussian_splatting_py.splatfacto3d import Splatfacto3D
+from gaussian_splatting_py.splatfacto3d import Splatfacto3D as splatfacto
+from gaussian_splatting_py.vision_utils.vision_utils import convert_intrinsics, warp_image
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, NBVPoses, NBVPosesResponse, NBVPosesRequest, NBVResult, NBVResultRequest, NBVResultResponse, SaveModel, SaveModelRequest, SaveModelResponse
 
 class VisionNode(object):
 
     def __init__(self) -> None:
         rospy.init_node("vision_node")
+        rospy.loginfo("Vision Node Initializing")
 
         # fetch parameter
-        self.CAMERA_TOPC = rospy.get_param("~image_topic", "/image")
+        self.CAMERA_TOPIC = rospy.get_param("~image_topic", "/image")
         self.cam_info_topic = rospy.get_param("~cam_info_topic", "/camera_info")
+        
+        # depth cam topic and cam info
+        self.DEPTH_CAMERA_TOPIC = rospy.get_param("~depth_image_topic", "/image")
+        self.depth_cam_info_topic = rospy.get_param("~depth_cam_info_topic", "/camera_info")
+        
         self.save_data = rospy.get_param("~save_data", "False")
-        self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/Documents/data")
+        self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/NextBestSense/data")
+        self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/touch-gs-data/bunny_blender_data")
         
-        self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/Documents/data")
-        
-        # training thread
+        # GS model
         self.gs_training = False
-        self.gs_model = Splatfacto3D(data_dir=self.gs_data_dir)
+        self.gs_model = splatfacto(data_dir=self.gs_data_dir)
         
-        rospy.loginfo("Camera Topic: {}".format(self.CAMERA_TOPC))
+        rospy.loginfo("Camera Topic: {}".format(self.CAMERA_TOPIC))
+        rospy.loginfo("Depth Camera Topic: {}".format(self.DEPTH_CAMERA_TOPIC))
         rospy.loginfo("Save Data: {}".format(self.save_data))
         rospy.loginfo("Save Data Dir: {}".format(self.save_data_dir))
 
         # add service
         rospy.loginfo("Adding services")
         self.addview_srv = rospy.Service("add_view", Trigger, self.addVisionCb)
+        
         self.nbv_srv = rospy.Service("next_best_view", NBV, self.NextBestView)
         self.nbv_get_poses_srv = rospy.Service("get_poses", NBVPoses, self.getNBVPoses)
         self.nbv_get_poses_srv = rospy.Service("receive_nbv_scores", NBVResult, self.receiveNBVScoresGS)
         self.savemodel_srv = rospy.Service("save_model", SaveModel, self.saveModelCb)
-
+        
         # wait for image topic
         rospy.loginfo("Waiting for camera topic")
-        rospy.wait_for_message(self.CAMERA_TOPC, Image)
+        rospy.wait_for_message(self.CAMERA_TOPIC, Image)
+        rospy.loginfo("Camera topic found")
+        
+        # wait for depth image topic
+        rospy.loginfo("Waiting for depth camera topic")
+        rospy.loginfo(self.DEPTH_CAMERA_TOPIC)
+        
+        rospy.wait_for_message(self.DEPTH_CAMERA_TOPIC, Image)
+        rospy.loginfo("Depth Camera topic found")
+        self.bridge = CvBridge()
+        
+        # get camera infos 
+        rospy.loginfo("Waiting for camera info")
+        self.color_cam_info: CameraInfo = rospy.wait_for_message(self.cam_info_topic, CameraInfo)
+        self.depth_cam_info: CameraInfo = rospy.wait_for_message(self.depth_cam_info_topic, CameraInfo)
 
         # store images in (H, W, 3) [0 - 255]
         self.images: List[np.ndarray] = []
@@ -98,6 +123,8 @@ class VisionNode(object):
         """ Save Model Callback """
         res = SaveModelResponse()
         res.success = req.success
+        
+        rospy.loginfo("Saving Model")
 
         if self.save_data:
             self.save_images()
@@ -122,14 +149,42 @@ class VisionNode(object):
         res = TriggerResponse()
         res.success = True
 
-        # grap the image message
-        img:Image = rospy.wait_for_message(self.CAMERA_TOPC, Image)
+        # grab the image message
+        img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
 
-        # convert to numpy array
+        # grab the depth image message
+        depth_img: Image = rospy.wait_for_message(self.DEPTH_CAMERA_TOPIC, Image)
+        depth_img = self.bridge.imgmsg_to_cv2(depth_img, desired_encoding="passthrough")
+        
+        # get raw depth value
+        depth = np.clip(depth_img, 0, 3000) / 3000
+        
+        # convert depth image to color frame with known transform and camera intrinsics
+        print(self.depth_cam_info)
+        print(self.color_cam_info)
+        
+        # convert instrinsics
+        depth = convert_intrinsics(depth, new_size=(self.color_cam_info.width, self.color_cam_info.height))
+        K = np.array(self.color_cam_info.K).reshape(3, 3)
+        
+        try:
+            # self.listener.waitForTransform("base_link", "camera_color_frame", rospy.Time(), rospy.Duration(1))
+            cam2cam_transform: TransformStamped = self.tfBuffer.lookup_transform("camera_color_frame", "camera_depth_frame", rospy.Time())
+        except Exception as e:
+            rospy.logerr("Failed to lookup transform from camera to base_link")
+            res.success = False
+            res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
+            
+        cam2cam_transform = VisionNode.convertTransform2Numpy(cam2cam_transform)
+        # final warped depth to directly align with color image
+        depth = warp_image(depth, K, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])
+
         # process the image
         height = img.height
         width = img.width
         encoding = img.encoding
+        
+        rospy.loginfo("Image Encoding: {}".format(encoding))
 
         if encoding == "rgb8":
             img_np = np.frombuffer(img.data, dtype=np.uint8).reshape((height, width, 3))
@@ -156,7 +211,6 @@ class VisionNode(object):
             rospy.logerr("Failed to lookup transform from camera to base_link")
             res.success = False
             res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
-
         if res.success:
             # convert to numpy array
             # process the pose
@@ -165,12 +219,8 @@ class VisionNode(object):
             self.poses.append(c2w)
             self.images.append(img_np)
             
-            # start GS training!
-            self.gs_training = True
-            self.gs_model.start_training()
-
             res.message = "Success"
-        
+            rospy.loginfo(f"Added view to the dataset with {len(self.images)} images")
         return res
     
     def getNBVPoses(self, req: NBVPosesRequest) -> NBVPosesResponse:
@@ -288,7 +338,9 @@ class VisionNode(object):
         # dump to json file
         json_file = osp.join(data_base_dir, "transforms.json")
         with open(json_file, "w") as f:
-            json.dump(json_txt, f)
+            json.dump(json_txt, f, indent=4)
+            
+        rospy.loginfo(f"Saved images to {data_base_dir}")
 
     def EvaluatePoses(self, poses:List[PoseStamped]) -> np.ndarray:
         """ 
@@ -309,6 +361,9 @@ class VisionNode(object):
     def saveModel(self):
         """ Save the model  """
         # send request to NS to continue training
+        self.gs_training = True
+        
+        self.gs_model.start_training()
 
 
 if __name__ == "__main__":

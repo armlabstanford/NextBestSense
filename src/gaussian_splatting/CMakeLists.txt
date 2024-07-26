@@ -57,6 +57,7 @@ add_service_files(
   NBV.srv
   NBVPoses.srv
   NBVResult.srv
+  SaveModel.srv
 )
 
 ## Generate actions in the 'action' folder

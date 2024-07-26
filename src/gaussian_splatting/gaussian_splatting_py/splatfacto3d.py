@@ -1,6 +1,6 @@
 # ARMLab 2024
 import subprocess
-from base_splatfacto import ROSSplatfacto
+from gaussian_splatting_py.base_splatfacto import ROSSplatfacto
 
 
 class Splatfacto3D(ROSSplatfacto):

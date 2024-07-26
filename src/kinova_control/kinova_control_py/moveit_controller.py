@@ -52,7 +52,7 @@ from typing import List
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
-BOX_DIMS = (0.1, 0.1, 0.1)
+BOX_DIMS = (0.15, 0.15, 0.15)
 
 class ExampleMoveItTrajectories(object):
   """ExampleMoveItTrajectories"""
@@ -62,6 +62,7 @@ class ExampleMoveItTrajectories(object):
     super(ExampleMoveItTrajectories, self).__init__()
     moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node('example_move_it_trajectories')
+    rospy.loginfo("Initializing ExampleMoveItTrajectories")
 
     try:
       self.is_gripper_present = rospy.get_param(rospy.get_namespace() + "is_gripper_present", False)
@@ -81,6 +82,8 @@ class ExampleMoveItTrajectories(object):
                                                     moveit_msgs.msg.DisplayTrajectory,
                                                     queue_size=20)
       
+      
+      
       box_pose = geometry_msgs.msg.PoseStamped()
       box_pose.pose.orientation.w = 1.0
       box_pose.pose.position.x = OBJECT_CENTER[0]
@@ -90,6 +93,7 @@ class ExampleMoveItTrajectories(object):
       box_name = "box"
       # add box to the scene. In the future, resize to object size in GS
       self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
+      rospy.loginfo("Added box to the scene")
 
       if self.is_gripper_present:
         gripper_group_name = "gripper"
@@ -101,12 +105,15 @@ class ExampleMoveItTrajectories(object):
       self.is_init_success = False
     else:
       self.is_init_success = True
+      
+    rospy.loginfo("Initialization done. Generating Poses ...")
 
     self.pose_generator = RandomPoseGenerator()
     self.num_poses = 10
-
+    
     # wait for vision node service
     rospy.loginfo("Waiting for Vision Node Services...")
+    
     rospy.wait_for_service("/add_view")
     rospy.wait_for_service("/next_best_view")
     rospy.wait_for_service("/save_model")
@@ -244,19 +251,20 @@ class ExampleMoveItTrajectories(object):
   
   def run(self):
     """ Run Method (Main Thread) """
-    # For testing purposes
+    
     success = self.is_init_success
     try:
         rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
     except:
         pass
+    rospy.loginfo("Starting MoveIt Trajectories Example")
     
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       print(success)
       
-      
+    
     start_views = 4
     total_views_to_add = 10 
     test_views = 15
@@ -274,6 +282,8 @@ class ExampleMoveItTrajectories(object):
       # Next Best View
       pose_req = NBVRequest()
       candidate_joints = []
+      rospy.loginfo(view_type_ids[i])
+      
       # Sample views near the sphere until we have 10 poses
       pose_cnt = 0
       
@@ -282,8 +292,8 @@ class ExampleMoveItTrajectories(object):
         joints = self.pose_generator.calcIK(pose) 
 
         # make plans to reach the pose
-        success, trajector, planning_time, err_code = self.arm_group.plan(joints)
-
+        success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+        
         # if plan succeeds (with box in scene), we can add the pose as valid
         if success:
           pose_cnt += 1
@@ -292,7 +302,6 @@ class ExampleMoveItTrajectories(object):
           pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
           pose_req.poses.append(pose_msg)
           candidate_joints.append(joints)
-
       if view_type_ids[i] == 0 or view_type_ids[i] == 2:
         # choose random joints
         joints = candidate_joints[np.random.randint(0, self.num_poses)]
@@ -315,11 +324,12 @@ class ExampleMoveItTrajectories(object):
 
         # Add the view
         req = TriggerRequest()
-        self.send_req_helper(self.add_view_client, req)
+        res = self.send_req_helper(self.add_view_client, req)
         
         # train the model at the end of the first few views
         if i >= start_views - 1:
           rospy.loginfo("Saving Model with new pose ...")
+          exit()
           req = SaveModelRequest()
           req.success = success
           self.send_req_helper(self.save_model_client, req)
@@ -333,7 +343,7 @@ class ExampleMoveItTrajectories(object):
 
 def main():
   example = ExampleMoveItTrajectories()
-  import pdb; pdb.set_trace()
+  # import pdb; pdb.set_trace()
   example.run()
 
 if __name__ == '__main__':
