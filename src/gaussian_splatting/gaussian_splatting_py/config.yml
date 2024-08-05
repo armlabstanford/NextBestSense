@@ -1,0 +1,3 @@
+model:
+  name: "Metric3DV2"
+  type: "vitl"
