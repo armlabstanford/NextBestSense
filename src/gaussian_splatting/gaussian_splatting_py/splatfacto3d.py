@@ -13,21 +13,21 @@ class Splatfacto3D(ROSSplatfacto):
         """
         super(Splatfacto3D, self).__init__(data_dir, render_uncertainty, train_split_fraction, depth_uncertainty_weight, rgb_uncertainty_weight)
 
-    def start_training(self, steps=15000):
+    def start_training(self, data_dir, steps=15000):
         """
         Start training Gaussian Splatting 
         """
         print("Starting training")
         
-        command = f"""ns-train depth-splatfacto --data {self.data_dir} --pipeline.model.render_uncertainty {self.render_uncertainty} --viewer.quit-on-train-completion True nerfstudio-data --train-split-fraction 0.5"""
+        command = f"""ns-train depth-splatfacto --data {data_dir} --pipeline.model.render_uncertainty {self.render_uncertainty} --viewer.quit-on-train-completion True --pipeline.model.depth-loss-mult 0.1 nerfstudio-data --train-split-fraction 1"""
         # Open terminal and run GS training
+        print(command)
         subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', command])
-
         print("Starting GS Training.")
 
     
 if __name__ == "__main__":
     # train on bunny blender example
-    data_dir = '/home/user/touch-gs-data/bunny_blender_data'
+    data_dir = '/home/user/NextBestSense/data/2024-07-28-02-02-26'
     splatfacto = Splatfacto3D(data_dir=data_dir)
-    splatfacto.start_training()
+    splatfacto.start_training(data_dir)

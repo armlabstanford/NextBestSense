@@ -9,7 +9,9 @@ import cv2
 import json
 from typing import List, Union
 
+
 import tf2_ros as tf2
+import tf2_geometry_msgs
 from scipy.spatial.transform import Rotation as sciR
 
 import rospy
@@ -18,9 +20,12 @@ from cv_bridge import CvBridge
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest
 from geometry_msgs.msg import PoseStamped, Pose, Transform, TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
-# from gaussian_splatting.gaussian_splatting_py.splatfacto3d import Splatfacto3D
+
 from gaussian_splatting_py.splatfacto3d import Splatfacto3D as splatfacto
-from gaussian_splatting_py.vision_utils.vision_utils import convert_intrinsics, warp_image
+from gaussian_splatting_py.vision_utils.vision_utils import convert_intrinsics, learn_scale_and_offset_raw, warp_image
+from gaussian_splatting_py.load_yaml import load_config
+from gaussian_splatting_py.monocular_depth import MonocularDepth
+
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, NBVPoses, NBVPosesResponse, NBVPosesRequest, NBVResult, NBVResultRequest, NBVResultResponse, SaveModel, SaveModelRequest, SaveModelResponse
 
 class VisionNode(object):
@@ -37,13 +42,17 @@ class VisionNode(object):
         self.DEPTH_CAMERA_TOPIC = rospy.get_param("~depth_image_topic", "/image")
         self.depth_cam_info_topic = rospy.get_param("~depth_cam_info_topic", "/camera_info")
         
-        self.save_data = rospy.get_param("~save_data", "False")
+        self.save_data = rospy.get_param("~save_data", "True")
         self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/NextBestSense/data")
         self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/touch-gs-data/bunny_blender_data")
         
         # GS model
         self.gs_training = False
         self.gs_model = splatfacto(data_dir=self.gs_data_dir)
+        
+        # construct monocular depth model
+        param_filename = osp.join(osp.dirname(osp.abspath(__file__)), "config.yml") 
+        self.monocular_depth = MonocularDepth(load_config(param_filename))
         
         rospy.loginfo("Camera Topic: {}".format(self.CAMERA_TOPIC))
         rospy.loginfo("Depth Camera Topic: {}".format(self.DEPTH_CAMERA_TOPIC))
@@ -79,6 +88,8 @@ class VisionNode(object):
 
         # store images in (H, W, 3) [0 - 255]
         self.images: List[np.ndarray] = []
+        # store depth images in (H, W) [0 - max val of uint16]
+        self.depths: List[np.ndarray] = []
         # store original camera to world pose 
         self.poses: List[np.ndarray] = []
         # store poses for next best view to send to GS
@@ -88,10 +99,16 @@ class VisionNode(object):
 
         self.tfBuffer = tf2.Buffer()
         self.listener = tf2.TransformListener(self.tfBuffer)
-
-        # TODO initialize the radiance field
+        
+        self.idx = 0
+        
+        self.data_base_dir = None
+        self.gs_training_dir = None
+        
+        self.only_generate_test_views = True
 
         rospy.loginfo("Vision Node Initialized")
+        
 
     def convertPose2Numpy(pose:Union[PoseStamped, Pose]) -> np.ndarray:
         if isinstance(pose, PoseStamped):
@@ -119,19 +136,54 @@ class VisionNode(object):
 
         return c2w
     
+    def convertNumpy2PoseStamped(c2w:np.ndarray) -> PoseStamped:
+        pose = PoseStamped()
+        pose.header.frame_id = "base_link"
+        pose.pose.position.x = c2w[0, 3]
+        pose.pose.position.y = c2w[1, 3]
+        pose.pose.position.z = c2w[2, 3]
+        
+        quat = sciR.from_matrix(c2w[:3, :3])
+        pose.pose.orientation.x = quat.as_quat()[0]
+        pose.pose.orientation.y = quat.as_quat()[1]
+        pose.pose.orientation.z = quat.as_quat()[2]
+        pose.pose.orientation.w = quat.as_quat()[3]
+        
+        return pose
+    
     def saveModelCb(self, req) -> SaveModelResponse:
         """ Save Model Callback """
         res = SaveModelResponse()
         res.success = req.success
         
-        rospy.loginfo("Saving Model")
-
         if self.save_data:
-            self.save_images()
-
-        # save the model
-        self.saveModel()
-
+            gs_data_dir = self.save_images()
+            
+        if self.only_generate_test_views:
+            res.message = "Test views done."
+            return res
+        
+        if self.gs_training:
+            rospy.wait_for_service('continue_training')
+            rospy.loginfo("Calling continue_training service")
+            try:
+                continue_training_srv = rospy.ServiceProxy('continue_training', Trigger)
+                request = TriggerRequest()
+                response = continue_training_srv(request)
+                if response.success:
+                    rospy.loginfo(f"Successfully called continue_training service")
+                else:
+                    rospy.logfatal("Failed to call continue_training service")
+            except rospy.ServiceException as e:
+                rospy.logerr(f"Service call failed with error {e}")
+            
+        rospy.loginfo("Saving Model...")
+        
+        # start training model
+        if not self.gs_training:
+            self.saveModel(gs_data_dir)
+            
+        
         res.message = "Success"
         return res
 
@@ -146,29 +198,28 @@ class VisionNode(object):
                 X=2 -> Unsupported image encoding
                 X=3 -> Failed to lookup transform from camera to base_link
         """
+        
         res = TriggerResponse()
         res.success = True
+        rospy.sleep(5)
 
         # grab the image message
         img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
+        img_np = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 
         # grab the depth image message
         depth_img: Image = rospy.wait_for_message(self.DEPTH_CAMERA_TOPIC, Image)
-        depth_img = self.bridge.imgmsg_to_cv2(depth_img, desired_encoding="passthrough")
+        depth = self.bridge.imgmsg_to_cv2(depth_img, desired_encoding="passthrough") / 1000.0
+        # if depth value is > 20, set to 0
+        depth[depth > 20] = 0
         
-        # get raw depth value
-        depth = np.clip(depth_img, 0, 3000) / 3000
-        
-        # convert depth image to color frame with known transform and camera intrinsics
-        print(self.depth_cam_info)
-        print(self.color_cam_info)
+        new_intrinsics = np.array(self.color_cam_info.K)
+        new_intrinsics_tup = (new_intrinsics[0], new_intrinsics[4], new_intrinsics[2], new_intrinsics[5])
         
         # convert instrinsics
-        depth = convert_intrinsics(depth, new_size=(self.color_cam_info.width, self.color_cam_info.height))
-        K = np.array(self.color_cam_info.K).reshape(3, 3)
+        depth = convert_intrinsics(depth, new_size=(self.color_cam_info.width, self.color_cam_info.height), new_intrinsics=new_intrinsics_tup)
         
         try:
-            # self.listener.waitForTransform("base_link", "camera_color_frame", rospy.Time(), rospy.Duration(1))
             cam2cam_transform: TransformStamped = self.tfBuffer.lookup_transform("camera_color_frame", "camera_depth_frame", rospy.Time())
         except Exception as e:
             rospy.logerr("Failed to lookup transform from camera to base_link")
@@ -176,48 +227,49 @@ class VisionNode(object):
             res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
             
         cam2cam_transform = VisionNode.convertTransform2Numpy(cam2cam_transform)
-        # final warped depth to directly align with color image
-        depth = warp_image(depth, K, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])
-
-        # process the image
-        height = img.height
-        width = img.width
-        encoding = img.encoding
         
-        rospy.loginfo("Image Encoding: {}".format(encoding))
-
-        if encoding == "rgb8":
-            img_np = np.frombuffer(img.data, dtype=np.uint8).reshape((height, width, 3))
-        elif encoding == "rgb16":
-            img_np = np.frombuffer(img.data, dtype=np.uint16).reshape((height, width, 3))
-        elif encoding == "rgba8":
-            img_np = np.frombuffer(img.data, dtype=np.uint8).reshape((height, width, 4))
-        elif encoding == "rgba16":
-            img_np = np.frombuffer(img.data, dtype=np.uint16).reshape((height, width, 4))
-        elif encoding == "mono8":
-            img_np = np.frombuffer(img.data, dtype=np.uint8).reshape((height, width, 1))
-        elif encoding == "mono16":
-            img_np = np.frombuffer(img.data, dtype=np.uint16).reshape((height, width, 1))
-        else:
-            rospy.logerr("Unsupported image encoding: {}".format(encoding))
-            res.success = False
-            res.message = "Error Code 2: Unsupported image encoding: {}".format(encoding)
-
+        img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+        
+        # run MDE to get the depth image
+        output = self.monocular_depth(img_np)
+        predicted_depth = output['depth']
+        
+        # align depth, save later
+        # (TODO) do this alignment in a smarter way with SAM2!
+        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
+        depth_np = (scale * predicted_depth) + offset
+        # make values lt 0 to 0
+        depth_np[depth_np < 0] = 0
+        rospy.loginfo(f"Scale: {scale}, Offset: {offset}")
+        
+        # save fig of the depth image
+        full_mde_path = osp.join(self.save_data_dir, f"mde_depth_img{self.idx}.png")
+        full_rs_path = osp.join(self.save_data_dir, f"rs_depth_img{self.idx}.png")
+        self.idx += 1
+        
+        plt.figure()
+        plt.imshow(depth_np, cmap='viridis')
+        plt.colorbar(label='Depth')
+        plt.imsave(full_mde_path, depth_np, cmap='viridis')
+        
+        plt.figure()
+        plt.imshow(depth, cmap='viridis')
+        plt.colorbar(label='Depth')
+        plt.imsave(full_rs_path, depth, cmap='viridis')
+        
         # loop up the transform from camera to base_link
         try:
-            # self.listener.waitForTransform("base_link", "camera_color_frame", rospy.Time(), rospy.Duration(1))
-            transform:TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_color_frame", rospy.Time())
+            transform: TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_link", rospy.Time())
         except Exception as e:
-            rospy.logerr("Failed to lookup transform from camera to base_link")
+            rospy.logerr(f"Failed to lookup transform from camera to base_link: {e}")
             res.success = False
             res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
         if res.success:
             # convert to numpy array
-            # process the pose
             c2w = VisionNode.convertTransform2Numpy(transform)
-
             self.poses.append(c2w)
             self.images.append(img_np)
+            self.depths.append(depth_np)
             
             res.message = "Success"
             rospy.loginfo(f"Added view to the dataset with {len(self.images)} images")
@@ -273,7 +325,7 @@ class VisionNode(object):
             res.success = True
             res.message = "No-Op -- No poses provided"
             return None
-
+        
         scores = self.EvaluatePoses(poses)
 
         # return response
@@ -282,19 +334,23 @@ class VisionNode(object):
         res.scores = list(scores)
         return res
     
-    def save_images(self):
+    def save_images(self, copy_mask: bool=False):
         """ Save the captured images as a NeRF Synthetic Dataset format
             When new views exist, """
         # get camera info
         
         # get the date format in Year-Month-Day-Hour-Minute-Second
         
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d-%H-%M-%S")
+        if self.gs_training_dir is None:
+        
+            now = datetime.datetime.now()
+            date_str = now.strftime("%Y-%m-%d-%H-%M-%S")
 
-        data_base_dir = osp.join(self.save_data_dir, date_str)
-        os.makedirs(data_base_dir, exist_ok=True)
-        os.makedirs(osp.join(data_base_dir, "images"), exist_ok=True)
+            data_base_dir = osp.join(self.save_data_dir, date_str)
+            os.makedirs(data_base_dir, exist_ok=True)
+            os.makedirs(osp.join(data_base_dir, "images"), exist_ok=True)
+            self.gs_training_dir = data_base_dir
+        
 
         cam_info:CameraInfo = rospy.wait_for_message(self.cam_info_topic, CameraInfo)
 
@@ -306,6 +362,8 @@ class VisionNode(object):
 
         cam_height = cam_info.height
         cam_width = cam_info.width
+        
+        mask_name = "kinova_mask.png"
 
         json_txt = {
             "w": cam_width,
@@ -316,54 +374,110 @@ class VisionNode(object):
             "cy": cam_K[1, 2],
             "camera_angle_x": fovx,
             "camera_angle_y": fovy,
+            # "mask_file": mask_name,
             "frames": [],
         }
+        
+        if copy_mask:
+            json_txt["mask_file"] = mask_name
+            # copy mask, which is one dir outside of the base dir, to the base dir
+            mask_path = osp.join(self.save_data_dir, mask_name)
+            # open mask and save to the new dir
+            mask = cv2.imread(mask_path)
+            mask_path = osp.join(data_base_dir, mask_name)
+            cv2.imwrite(mask_path, mask)
 
-        for img_idx, (pose, image) in enumerate(zip(self.poses, self.images)):
+        for img_idx, (pose, image, depth) in enumerate(zip(self.poses, self.images, self.depths)):
             # save the image
-            image_path = osp.join(data_base_dir, "images", "{:04d}.png".format(img_idx))
+            image_path = osp.join(self.gs_training_dir, "images", "{:04d}.png".format(img_idx))
+            depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_depth.png".format(img_idx))
+            
+            depth = (depth * 1000).astype(np.uint16)
 
-            image = image[:, :, ::-1] # RGB to BGR
             cv2.imwrite(image_path, image)
+            cv2.imwrite(depth_path, depth)
 
             # save the pose
-            pose_list = [list(row) for row in pose]
+            pose_list = pose.tolist()
             pose_info = {
                 "file_path": osp.join("images", "{:04d}.png".format(img_idx)),
+                "depth_file_path": osp.join("images", "{:04d}_depth.png".format(img_idx)),
                 "transform_matrix": pose_list,
             }
 
             json_txt["frames"].append(pose_info)
 
         # dump to json file
-        json_file = osp.join(data_base_dir, "transforms.json")
+        json_file = osp.join(self.gs_training_dir, "transforms.json")
         with open(json_file, "w") as f:
             json.dump(json_txt, f, indent=4)
             
-        rospy.loginfo(f"Saved images to {data_base_dir}")
+        rospy.loginfo(f"Saved images to {self.gs_training_dir}")
+        
+        return self.gs_training_dir
+    
+    def invertTransform(self, transform:np.ndarray) -> np.ndarray:
+        """ Invert the transformation matrix """
+        inv_transform = np.eye(4)
+        inv_transform[:3, :3] = transform[:3, :3].T
+        inv_transform[:3, 3] = -inv_transform[:3, :3] @ transform[:3, 3]
+        return inv_transform
 
     def EvaluatePoses(self, poses:List[PoseStamped]) -> np.ndarray:
         """ 
         Evaluate poses. Waits a few minutes for GS to reach 2k steps, then requests a pose from GS with FisherRF
         """
         self.done = False
-        self.poses_for_nbv = poses
+        
+        cam_poses: List[PoseStamped] = []
+        
+        # compute transform from EE to camera
+        try:
+            transform: TransformStamped = self.tfBuffer.lookup_transform("end_effector_link", "camera_link", rospy.Time())
+        except Exception as e:
+            rospy.logerr(f"Failed to lookup transform from camera to end_effector_link: {e}")
+            return None
+        
+        for pose in poses:
+            try:
+                pose.pose.position.x += transform.transform.translation.x
+                pose.pose.position.y += transform.transform.translation.y
+                pose.pose.position.z += transform.transform.translation.z
+
+                # get transformation matrix from pose
+                world2cam_transform = VisionNode.convertPose2Numpy(pose)
+                
+                # invert the transformation
+                cam2world_transform = self.invertTransform(world2cam_transform)
+                
+                # convert to pose
+                new_pose = VisionNode.convertNumpy2PoseStamped(cam2world_transform)
+                cam_poses.append(new_pose)
+            except Exception as e:
+                rospy.logerr(f"Failed to transform pose: {e}")
+                return None
+        
+        self.poses_for_nbv = cam_poses
         self.scores = []
+        
         rate = rospy.Rate(1)  # 1 Hz
         # loop until GS hits 2k steps and requests a pose
         while not rospy.is_shutdown() and not self.done:
             rospy.loginfo("GS running...")
             rate.sleep()
-            
-        # result is obtained, return the scores
+        rospy.loginfo("GS Done")
+        
+        # result is obtained, return the scores, which should be populated
         return np.array(self.scores)
 
-    def saveModel(self):
+    def saveModel(self, gs_data_dir: str):
         """ Save the model  """
         # send request to NS to continue training
         self.gs_training = True
         
-        self.gs_model.start_training()
+        # call training in data_dir
+        self.gs_model.start_training(gs_data_dir)
+        
 
 
 if __name__ == "__main__":

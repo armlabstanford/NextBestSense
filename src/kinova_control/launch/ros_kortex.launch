@@ -1,0 +1,6 @@
+<launch>
+    <!-- Include the first launch file -->
+    <include file="$(find kortex_driver)/launch/kortex_driver.launch"/>
+    <!-- Include the second launch file -->
+    <include file="$(find kinova_vision)/launch/kinova_vision.launch"/>
+</launch>

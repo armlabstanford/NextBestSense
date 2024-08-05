@@ -28,6 +28,8 @@
 # rosrun kortex_examples example_move_it_trajectories.py __ns:=my_gen3
 
 import sys
+
+from matplotlib import pyplot as plt
 sys.path.append('/miniconda/envs/densetact/lib/python3.8/site-packages')
 
 import time
@@ -49,6 +51,11 @@ import kdl_parser_py.urdf as kdl_parser
 import PyKDL
 
 from typing import List
+
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image, CameraInfo
+
+
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
@@ -81,8 +88,8 @@ class ExampleMoveItTrajectories(object):
       self.display_trajectory_publisher = rospy.Publisher(rospy.get_namespace() + 'move_group/display_planned_path',
                                                     moveit_msgs.msg.DisplayTrajectory,
                                                     queue_size=20)
-      
-      
+      # set max acc scaling factor
+      self.arm_group.set_max_acceleration_scaling_factor(0.5)
       
       box_pose = geometry_msgs.msg.PoseStamped()
       box_pose.pose.orientation.w = 1.0
@@ -106,6 +113,7 @@ class ExampleMoveItTrajectories(object):
     else:
       self.is_init_success = True
       
+      
     rospy.loginfo("Initialization done. Generating Poses ...")
 
     self.pose_generator = RandomPoseGenerator()
@@ -123,6 +131,33 @@ class ExampleMoveItTrajectories(object):
     self.save_model_client = rospy.ServiceProxy("/save_model", SaveModel)
 
     rospy.loginfo("Vision Node Services are available")
+    
+    
+    self.finish_training_service = rospy.Service("finish_training", Trigger, self.finishTrainingCb)
+    
+    self.training_done = False
+    
+    
+  def finishTrainingCb(self, req) -> TriggerResponse:
+      """ AddVision Cb 
+      
+      return TriggerResponse:
+          bool success
+          message:
+              form: Error Code X: [Error Message]
+              X=1 -> Training thread is still running
+              X=2 -> Unsupported image encoding
+              X=3 -> Failed to lookup transform from camera to base_link
+      """
+      
+      res = TriggerResponse()
+      res.success = True
+      res.message = "Robot finished training GS. Now adding test views."
+      
+      self.training_done = True
+      rospy.loginfo("Training Done")
+      
+      return res
 
   def reach_named_position(self, target):
     arm_group = self.arm_group
@@ -133,6 +168,7 @@ class ExampleMoveItTrajectories(object):
     arm_group.set_named_target(target)
     # Plan the trajectory
     (success_flag, trajectory_message, planning_time, error_code) = arm_group.plan()
+    print(success_flag, planning_time, error_code)
     # Execute the trajectory and block while it's not finished
     return arm_group.execute(trajectory_message, wait=True)
 
@@ -146,6 +182,8 @@ class ExampleMoveItTrajectories(object):
     
     # Plan and execute in one command
     success &= arm_group.go(wait=True)
+    
+    arm_group.stop()
 
     # Show joint positions after movement
     new_joint_positions = arm_group.get_current_joint_values()
@@ -252,6 +290,8 @@ class ExampleMoveItTrajectories(object):
   def run(self):
     """ Run Method (Main Thread) """
     
+    model_started_training = False
+    
     success = self.is_init_success
     try:
         rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
@@ -262,23 +302,20 @@ class ExampleMoveItTrajectories(object):
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
-      print(success)
       
-    
-    start_views = 4
-    total_views_to_add = 10 
-    test_views = 15
+    start_views = 25
+    total_views_to_add = 20 
     view_type_ids = []
     for i in range(start_views):
       view_type_ids.append(0)
     for i in range(total_views_to_add):
       view_type_ids.append(1)
-    for i in range(test_views):
-      view_type_ids.append(2)
       
     total_iters = len(view_type_ids)
-
-    for i in range(total_iters):
+    
+    i = 0
+    
+    while i < total_iters:
       # Next Best View
       pose_req = NBVRequest()
       candidate_joints = []
@@ -288,11 +325,19 @@ class ExampleMoveItTrajectories(object):
       pose_cnt = 0
       
       while pose_cnt < self.num_poses:
-        pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.1, 0.4)
+        pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
         joints = self.pose_generator.calcIK(pose) 
 
         # make plans to reach the pose
-        success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+        success = False
+        while not success:
+          try:
+            success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+          except: 
+            success = False
+            rospy.logwarn("Fail to Plan Trajectory")
+            pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
+            joints = self.pose_generator.calcIK(pose) 
         
         # if plan succeeds (with box in scene), we can add the pose as valid
         if success:
@@ -302,37 +347,63 @@ class ExampleMoveItTrajectories(object):
           pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
           pose_req.poses.append(pose_msg)
           candidate_joints.append(joints)
-      if view_type_ids[i] == 0 or view_type_ids[i] == 2:
+      if view_type_ids[i] == 0:
         # choose random joints
         joints = candidate_joints[np.random.randint(0, self.num_poses)]
+        
       elif view_type_ids[i] == 1:
-        # this is a train view, add it to the model
         # send the request for next best view
-        # this call will block until the model is trained up to 2k steps
-        res:NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
-        score = np.array(res.scores)
-        max_idx = np.argmax(score)
-        joints = candidate_joints[max_idx]
-
+        rospy.loginfo("Ready to call NBV")
+        res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+        scores = np.array(res.scores)
+        sorted_indices = np.argsort(scores)[::-1]
+        sorted_joints = [candidate_joints[i] for i in sorted_indices]
+        
+        joints = sorted_joints[0]
+        joint_config_idx = 0
+        
       # reach the view
       if joints is not None:
         try:
           success &= self.reach_joint_angles(joints)
           
+          if view_type_ids[i] == 1:
+            if not success:
+              rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
+              # skip other code and go to next view
+              while not success and joint_config_idx < len(sorted_joints):
+                joint_config_idx += 1
+                joints = sorted_joints[joint_config_idx]
+                success = self.reach_joint_angles(joints) 
+          
+          if view_type_ids[i] == 1:
+            rospy.loginfo("Went to Next Best View")
+            
         except:
           rospy.logwarn("Fail to Execute Joint Trajectory")
-
+          
+        if not success:
+          rospy.logwarn("Fail to Reach Joint Angles. Try Next View")
+          # skip other code and go to next view
+          continue
+        else: 
+          i += 1
+          
         # Add the view
         req = TriggerRequest()
         res = self.send_req_helper(self.add_view_client, req)
         
         # train the model at the end of the first few views
-        if i >= start_views - 1:
+        if i >= start_views:
           rospy.loginfo("Saving Model with new pose ...")
-          exit()
           req = SaveModelRequest()
           req.success = success
-          self.send_req_helper(self.save_model_client, req)
+          res = self.send_req_helper(self.save_model_client, req)
+          if "Test" in res.message:
+            rospy.loginfo("Model is in test mode, exiting gracefully")
+            exit()
+        else:
+          rospy.loginfo("Adding new train view...")
         
     # Save the model
     rospy.loginfo("Save Model ...")
@@ -343,7 +414,9 @@ class ExampleMoveItTrajectories(object):
 
 def main():
   example = ExampleMoveItTrajectories()
+  # optional debugging below
   # import pdb; pdb.set_trace()
+
   example.run()
 
 if __name__ == '__main__':

@@ -1,7 +1,9 @@
 import numpy as np
 import cv2
 
-def convert_intrinsics(img, old_intrinsics = (360.01, 360.01, 243, 137.92), new_intrinsics = (1297.67, 1298.63, 620.91, 238.28), new_size=(1280, 720)):
+from torchvision import transforms
+
+def convert_intrinsics(img, old_intrinsics = (360.01, 360.01, 243.87, 137.92), new_intrinsics = (1297.67, 1298.63, 620.91, 238.28), new_size=(1280, 720)):
     """
     Convert a set of images to a different set of camera intrinsics.
     Parameters:
@@ -66,3 +68,33 @@ def compute_homography(K, R, t):
     K_inv = np.linalg.inv(K)
     H = np.dot(K, np.dot(R - np.dot(t.reshape(-1, 1), K_inv[-1, :].reshape(1, -1)), K_inv))
     return H
+
+
+def resize_if_too_large(image):
+    if image.shape[0] > 1600 and image.shape[1] > 1600:
+        image = cv2.resize(image, (int(image.shape[1] / 2), int(image.shape[0] / 2)))
+    return image
+
+
+def preprocess_image(image):
+    # Transform to convert image to tensor and normalize
+    preprocess = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    return preprocess(image)
+
+def learn_scale_and_offset_raw(dense_depth, sparse_depth):
+    dense_depth_flat = dense_depth.flatten()
+    sparse_depth_flat = sparse_depth.flatten()
+
+    valid_mask = sparse_depth_flat > 0
+    dense_depth_valid = dense_depth_flat[valid_mask]
+    sparse_depth_valid = sparse_depth_flat[valid_mask]
+
+    A = np.vstack([dense_depth_valid, np.ones_like(dense_depth_valid)]).T
+    b = sparse_depth_valid
+
+    x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    scale, offset = x
+    return scale, offset
