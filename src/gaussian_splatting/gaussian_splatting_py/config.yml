@@ -1,3 +1,3 @@
 model:
-  name: "Metric3DV2"
+  name: "DepthAnythingV2"
   type: "vitl"

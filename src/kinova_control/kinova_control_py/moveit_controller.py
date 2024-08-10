@@ -182,7 +182,6 @@ class ExampleMoveItTrajectories(object):
     
     # Plan and execute in one command
     success &= arm_group.go(wait=True)
-    
     arm_group.stop()
 
     # Show joint positions after movement
@@ -303,7 +302,7 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       
-    start_views = 25
+    start_views = 5
     total_views_to_add = 20 
     view_type_ids = []
     for i in range(start_views):
@@ -339,7 +338,7 @@ class ExampleMoveItTrajectories(object):
             pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
             joints = self.pose_generator.calcIK(pose) 
         
-        # if plan succeeds (with box in scene), we can add the pose as valid
+        # if plan succeeds, we can add the pose as valid
         if success:
           pose_cnt += 1
 

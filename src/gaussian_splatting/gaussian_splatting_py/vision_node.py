@@ -22,6 +22,7 @@ from geometry_msgs.msg import PoseStamped, Pose, Transform, TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
 
 from gaussian_splatting_py.splatfacto3d import Splatfacto3D as splatfacto
+
 from gaussian_splatting_py.vision_utils.vision_utils import convert_intrinsics, learn_scale_and_offset_raw, warp_image
 from gaussian_splatting_py.load_yaml import load_config
 from gaussian_splatting_py.monocular_depth import MonocularDepth
@@ -104,8 +105,7 @@ class VisionNode(object):
         
         self.data_base_dir = None
         self.gs_training_dir = None
-        
-        self.only_generate_test_views = True
+        self.only_generate_test_views = False
 
         rospy.loginfo("Vision Node Initialized")
         
@@ -186,6 +186,37 @@ class VisionNode(object):
         
         res.message = "Success"
         return res
+    
+    
+    def align_depth(self, depth: np.ndarray, predicted_depth: np.ndarray, 
+                    rgb: np.ndarray, use_sam: bool = False) -> np.ndarray:
+        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
+        depth_np = (scale * predicted_depth) + offset
+        
+        # perform SAM2 semantic alignment if use_sam is True
+        if use_sam:
+            # call SAM2 process in python3.11. Save the image, depth, and predicted depth
+            img_path = osp.join(self.save_data_dir, "sam2_img.png")
+            depth_path = osp.join(self.save_data_dir, "sam2_depth.png")
+            mde_depth_path = osp.join(self.save_data_dir, "sam2_mde_depth.png")
+            
+            cv2.imwrite(img_path, rgb)
+            depth = (depth * 1000).astype(np.uint16)
+            predicted_depth = (predicted_depth * 1000).astype(np.uint16)
+            cv2.imwrite(depth_path, depth)
+            cv2.imwrite(mde_depth_path, predicted_depth)
+            
+            # hack with python3.11 to run SAM2 depth alignment
+            os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/run_sam2.py --img_path {img_path} --real_depth {depth_path} --mde_depth_path {mde_depth_path}")
+            
+            # read from mde_depth_aligned.png
+            depth_np = cv2.imread(osp.join(self.save_data_dir, "mde_depth_aligned.png"), cv2.IMREAD_UNCHANGED) / 1000.0
+        
+        # remove bad values
+        depth_np[depth_np < 0] = 0
+        
+        rospy.loginfo(f"Scale: {scale}, Offset: {offset}")
+        return depth_np
 
     def addVisionCb(self, req) -> TriggerResponse:
         """ AddVision Cb 
@@ -225,22 +256,22 @@ class VisionNode(object):
             rospy.logerr("Failed to lookup transform from camera to base_link")
             res.success = False
             res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
-            
         cam2cam_transform = VisionNode.convertTransform2Numpy(cam2cam_transform)
+        K = np.array(self.depth_cam_info.K).reshape(3, 3)
+        
+        
+        realsense_depth = warp_image(depth, K, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])
         
         img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+        
+        # run SAM2 to get the mask via user point query
         
         # run MDE to get the depth image
         output = self.monocular_depth(img_np)
         predicted_depth = output['depth']
         
-        # align depth, save later
-        # (TODO) do this alignment in a smarter way with SAM2!
-        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
-        depth_np = (scale * predicted_depth) + offset
-        # make values lt 0 to 0
-        depth_np[depth_np < 0] = 0
-        rospy.loginfo(f"Scale: {scale}, Offset: {offset}")
+        # align depths 
+        depth_np = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
         
         # save fig of the depth image
         full_mde_path = osp.join(self.save_data_dir, f"mde_depth_img{self.idx}.png")
@@ -249,23 +280,23 @@ class VisionNode(object):
         
         plt.figure()
         plt.imshow(depth_np, cmap='viridis')
-        plt.colorbar(label='Depth')
+        plt.colorbar(label='MDE Depth')
         plt.imsave(full_mde_path, depth_np, cmap='viridis')
         
         plt.figure()
-        plt.imshow(depth, cmap='viridis')
-        plt.colorbar(label='Depth')
-        plt.imsave(full_rs_path, depth, cmap='viridis')
+        plt.imshow(realsense_depth, cmap='viridis')
+        plt.colorbar(label='Realsense Depth')
+        plt.imsave(full_rs_path, realsense_depth, cmap='viridis')
+        cv2.imwrite(full_rs_path, (realsense_depth * 1000).astype(np.uint16))
         
-        # loop up the transform from camera to base_link
         try:
             transform: TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_link", rospy.Time())
         except Exception as e:
             rospy.logerr(f"Failed to lookup transform from camera to base_link: {e}")
             res.success = False
             res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
+            
         if res.success:
-            # convert to numpy array
             c2w = VisionNode.convertTransform2Numpy(transform)
             self.poses.append(c2w)
             self.images.append(img_np)
@@ -334,11 +365,10 @@ class VisionNode(object):
         res.scores = list(scores)
         return res
     
-    def save_images(self, copy_mask: bool=False):
+    def save_images(self):
         """ Save the captured images as a NeRF Synthetic Dataset format
             When new views exist, """
         # get camera info
-        
         # get the date format in Year-Month-Day-Hour-Minute-Second
         
         if self.gs_training_dir is None:
@@ -362,8 +392,6 @@ class VisionNode(object):
 
         cam_height = cam_info.height
         cam_width = cam_info.width
-        
-        mask_name = "kinova_mask.png"
 
         json_txt = {
             "w": cam_width,
@@ -374,18 +402,8 @@ class VisionNode(object):
             "cy": cam_K[1, 2],
             "camera_angle_x": fovx,
             "camera_angle_y": fovy,
-            # "mask_file": mask_name,
             "frames": [],
         }
-        
-        if copy_mask:
-            json_txt["mask_file"] = mask_name
-            # copy mask, which is one dir outside of the base dir, to the base dir
-            mask_path = osp.join(self.save_data_dir, mask_name)
-            # open mask and save to the new dir
-            mask = cv2.imread(mask_path)
-            mask_path = osp.join(data_base_dir, mask_name)
-            cv2.imwrite(mask_path, mask)
 
         for img_idx, (pose, image, depth) in enumerate(zip(self.poses, self.images, self.depths)):
             # save the image
@@ -402,9 +420,9 @@ class VisionNode(object):
             pose_info = {
                 "file_path": osp.join("images", "{:04d}.png".format(img_idx)),
                 "depth_file_path": osp.join("images", "{:04d}_depth.png".format(img_idx)),
+                "mask_file_path": osp.join("masks", "{:04d}_mask.png".format(img_idx)),
                 "transform_matrix": pose_list,
             }
-
             json_txt["frames"].append(pose_info)
 
         # dump to json file
@@ -412,7 +430,10 @@ class VisionNode(object):
         with open(json_file, "w") as f:
             json.dump(json_txt, f, indent=4)
             
-        rospy.loginfo(f"Saved images to {self.gs_training_dir}")
+        rospy.loginfo(f"Saved all images to {self.gs_training_dir}. Now generating masks in SAM2...")
+        
+        # construct sam2 masks.
+        os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --image_dir {self.gs_training_dir}")
         
         return self.gs_training_dir
     
@@ -440,18 +461,16 @@ class VisionNode(object):
         
         for pose in poses:
             try:
+                # convert to pose stamped of the cam pose given the EE pose.
                 pose.pose.position.x += transform.transform.translation.x
                 pose.pose.position.y += transform.transform.translation.y
                 pose.pose.position.z += transform.transform.translation.z
 
-                # get transformation matrix from pose
-                world2cam_transform = VisionNode.convertPose2Numpy(pose)
-                
-                # invert the transformation
-                cam2world_transform = self.invertTransform(world2cam_transform)
+                # get transformation matrix from pose (4 x 4)
+                cam_pose = VisionNode.convertPose2Numpy(pose)
                 
                 # convert to pose
-                new_pose = VisionNode.convertNumpy2PoseStamped(cam2world_transform)
+                new_pose = VisionNode.convertNumpy2PoseStamped(cam_pose)
                 cam_poses.append(new_pose)
             except Exception as e:
                 rospy.logerr(f"Failed to transform pose: {e}")

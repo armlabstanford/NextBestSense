@@ -247,4 +247,8 @@ class RandomPoseGenerator(PoseSolver):
 
       return pose
 
-    
+if __name__ == '__main__':
+  solver = PoseSolver()
+  pose = np.array([0.1, 0.1, 0.1, 0, 0, 0, 1])
+  joints = solver.calcIK(pose)
+  
