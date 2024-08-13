@@ -24,6 +24,7 @@ class Splatfacto3D(ROSSplatfacto):
         command = f"""ns-train depth-splatfacto --data {data_dir} --output-dir {outputs_dir} --pipeline.model.render_uncertainty {self.render_uncertainty} --viewer.quit-on-train-completion True --pipeline.model.depth-loss-mult 0.1 nerfstudio-data --train-split-fraction 1"""
         # Open terminal and run GS training
         print(command)
+        
         subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', command])
         print("Starting GS Training.")
 

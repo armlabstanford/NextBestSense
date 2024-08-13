@@ -32,7 +32,6 @@ def save_mask(mask, root_dir, out_path):
     """Save the mask as a PNG image."""
     mask_root = os.path.join(root_dir, 'masks')
     os.makedirs(mask_root, exist_ok=True)
-    
     mask_path = os.path.join(mask_root, out_path)
     mask = mask.reshape(mask.shape[-2], mask.shape[-1])
     mask = mask.astype(np.uint8) * 255
@@ -143,7 +142,7 @@ def start_app(video_dir, predictor):
         
         print("No need to annotate, using existing points..")
         compute_masks(inference_state, predictor, ann_frame_idx, 
-                      ann_obj_id, points_np, labels_np, video_dir, 
+                      ann_obj_id, points_np, labels_np, root_dir, 
                       video_dir, frame_names)
         exit()
 

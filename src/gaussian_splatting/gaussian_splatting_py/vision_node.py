@@ -261,10 +261,7 @@ class VisionNode(object):
         
         
         realsense_depth = warp_image(depth, K, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])
-        
         img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
-        
-        # run SAM2 to get the mask via user point query
         
         # run MDE to get the depth image
         output = self.monocular_depth(img_np)
@@ -420,7 +417,7 @@ class VisionNode(object):
             pose_info = {
                 "file_path": osp.join("images", "{:04d}.png".format(img_idx)),
                 "depth_file_path": osp.join("images", "{:04d}_depth.png".format(img_idx)),
-                "mask_file_path": osp.join("masks", "{:04d}_mask.png".format(img_idx)),
+                "mask_path": osp.join("masks", "{:04d}.png".format(img_idx)),
                 "transform_matrix": pose_list,
             }
             json_txt["frames"].append(pose_info)
@@ -432,8 +429,8 @@ class VisionNode(object):
             
         rospy.loginfo(f"Saved all images to {self.gs_training_dir}. Now generating masks in SAM2...")
         
-        # construct sam2 masks.
-        os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --image_dir {self.gs_training_dir}")
+        # construct sam2 masks
+        os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --data_dir {self.gs_training_dir}")
         
         return self.gs_training_dir
     
