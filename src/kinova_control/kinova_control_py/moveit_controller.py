@@ -32,15 +32,12 @@ import sys
 from matplotlib import pyplot as plt
 sys.path.append('/miniconda/envs/densetact/lib/python3.8/site-packages')
 
-import time
 import rospy
 import moveit_commander
 import moveit_msgs.msg
 import geometry_msgs.msg
 import numpy as np
-from pyquaternion import Quaternion
 from geometry_msgs.msg import PoseStamped, Pose
-from math import pi
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
 
@@ -55,11 +52,21 @@ from typing import List
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 
+import pickle
 
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
-BOX_DIMS = (0.15, 0.15, 0.15)
+BOX_DIMS = (0.15, 0.15, 0.13)
+
+EXP_POSES = {
+  "starting_joints": [],
+  "starting_poses": [],
+  "candidate_joints": [],
+  "candidate_poses": []
+}
+
+PICKLE_PATH_FULL = '/home/user/NextBestSense/data/EXP_POSES_1.pkl'
 
 class ExampleMoveItTrajectories(object):
   """ExampleMoveItTrajectories"""
@@ -70,6 +77,15 @@ class ExampleMoveItTrajectories(object):
     moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node('example_move_it_trajectories')
     rospy.loginfo("Initializing ExampleMoveItTrajectories")
+    
+    # read pickle file if it exists
+    # if it does not exist, create it
+    try:
+      with open(PICKLE_PATH_FULL, "rb") as f:
+        self.exp_poses = pickle.load(f)
+        self.exp_poses_available = True
+    except FileNotFoundError:
+      self.exp_poses_available = False
 
     try:
       self.is_gripper_present = rospy.get_param(rospy.get_namespace() + "is_gripper_present", False)
@@ -89,7 +105,7 @@ class ExampleMoveItTrajectories(object):
                                                     moveit_msgs.msg.DisplayTrajectory,
                                                     queue_size=20)
       # set max acc scaling factor
-      self.arm_group.set_max_acceleration_scaling_factor(0.5)
+      self.arm_group.set_max_acceleration_scaling_factor(0.3)
       
       box_pose = geometry_msgs.msg.PoseStamped()
       box_pose.pose.orientation.w = 1.0
@@ -158,6 +174,18 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo("Training Done")
       
       return res
+    
+  def get_exp_poses_at(self, i, view_type):
+    rospy.loginfo("Loading EXP_POSES")
+    if view_type == 0:
+      candidate_joints = self.exp_poses["starting_joints"]
+      poses = self.exp_poses["starting_poses"]
+      return [candidate_joints[i]], [poses[i]]
+    else:
+      candidate_joints = self.exp_poses["candidate_joints"]
+      poses = self.exp_poses["candidate_poses"]
+      idx = i - len(self.exp_poses["starting_joints"])
+      return candidate_joints[idx], poses[idx]
 
   def reach_named_position(self, target):
     arm_group = self.arm_group
@@ -172,7 +200,7 @@ class ExampleMoveItTrajectories(object):
     # Execute the trajectory and block while it's not finished
     return arm_group.execute(trajectory_message, wait=True)
 
-  def reach_joint_angles(self, joint_positions, tolerance=0.05):
+  def reach_joint_angles(self, joint_positions, tolerance=0.001):
     arm_group = self.arm_group
     success = True
 
@@ -218,19 +246,6 @@ class ExampleMoveItTrajectories(object):
     rospy.loginfo("Planning and going to the Cartesian Pose")
     return arm_group.go(wait=True)
 
-  def reach_gripper_position(self, relative_position):
-    gripper_group = self.gripper_group
-    
-    # We only have to move this joint because all others are mimic!
-    gripper_joint = self.robot.get_joint(self.gripper_joint_name)
-    gripper_max_absolute_pos = gripper_joint.max_bound()
-    gripper_min_absolute_pos = gripper_joint.min_bound()
-    try:
-      val = gripper_joint.move(relative_position * (gripper_max_absolute_pos - gripper_min_absolute_pos) + gripper_min_absolute_pos, True)
-      return val
-    except:
-      return False 
-    
   def send_req_helper(self, client, req):
     """ Send request helper """
     while True:
@@ -289,21 +304,18 @@ class ExampleMoveItTrajectories(object):
   def run(self):
     """ Run Method (Main Thread) """
     
-    model_started_training = False
-    
     success = self.is_init_success
     try:
         rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
     except:
         pass
-    rospy.loginfo("Starting MoveIt Trajectories Example")
     
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       
-    start_views = 5
-    total_views_to_add = 20 
+    start_views = 4
+    total_views_to_add = 25
     view_type_ids = []
     for i in range(start_views):
       view_type_ids.append(0)
@@ -311,7 +323,6 @@ class ExampleMoveItTrajectories(object):
       view_type_ids.append(1)
       
     total_iters = len(view_type_ids)
-    
     i = 0
     
     while i < total_iters:
@@ -321,34 +332,42 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo(view_type_ids[i])
       
       # Sample views near the sphere until we have 10 poses
-      pose_cnt = 0
-      
-      while pose_cnt < self.num_poses:
-        pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
-        joints = self.pose_generator.calcIK(pose) 
+      if self.exp_poses_available:
+        candidate_joints, pose_req.poses = self.get_exp_poses_at(i, view_type_ids[i])
+       
+      else:
+        pose_cnt = 0
+        while pose_cnt < self.num_poses:
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.15, 0.6)
+          joints = self.pose_generator.calcIK(pose) 
 
-        # make plans to reach the pose
-        success = False
-        while not success:
-          try:
-            success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
-          except: 
-            success = False
-            rospy.logwarn("Fail to Plan Trajectory")
-            pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
-            joints = self.pose_generator.calcIK(pose) 
-        
-        # if plan succeeds, we can add the pose as valid
-        if success:
-          pose_cnt += 1
+          # make plans to reach the pose
+          success = False
+          while not success:
+            try:
+              success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+            except: 
+              success = False
+              rospy.logwarn("Fail to Plan Trajectory")
+              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.15, 0.6)
+              joints = self.pose_generator.calcIK(pose) 
+          
+          # if plan succeeds, we can add the pose as valid
+          if success:
+            pose_cnt += 1
 
-          # convert to Pose message
-          pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
-          pose_req.poses.append(pose_msg)
-          candidate_joints.append(joints)
+            pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+            pose_req.poses.append(pose_msg)
+            candidate_joints.append(joints)
       if view_type_ids[i] == 0:
         # choose random joints
-        joints = candidate_joints[np.random.randint(0, self.num_poses)]
+        if self.exp_poses_available:
+          joints = candidate_joints[0]
+          pose = pose_req.poses[0]
+        else:
+          rand_idx = np.random.randint(0, self.num_poses)
+          joints = candidate_joints[rand_idx]
+          pose = pose_req.poses[rand_idx]
         
       elif view_type_ids[i] == 1:
         # send the request for next best view
@@ -386,6 +405,21 @@ class ExampleMoveItTrajectories(object):
           # skip other code and go to next view
           continue
         else: 
+          if view_type_ids[i] == 0:
+            EXP_POSES["starting_joints"].append(joints)
+            EXP_POSES["starting_poses"].append(pose)
+            
+          else:
+            # list of lists
+            EXP_POSES["candidate_joints"].append(candidate_joints)
+            EXP_POSES["candidate_poses"].append(pose_req.poses)
+            
+          # continually write EXP_POSES to file pickle
+          rospy.loginfo("Writing EXP_POSES")
+          # write pickle file
+          with open(PICKLE_PATH_FULL, "wb") as f:
+            pickle.dump(EXP_POSES, f)
+          
           i += 1
           
         # Add the view
@@ -413,9 +447,6 @@ class ExampleMoveItTrajectories(object):
 
 def main():
   example = ExampleMoveItTrajectories()
-  # optional debugging below
-  # import pdb; pdb.set_trace()
-
   example.run()
 
 if __name__ == '__main__':
