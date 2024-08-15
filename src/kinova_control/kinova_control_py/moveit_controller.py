@@ -28,7 +28,7 @@ import pickle
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
-BOX_DIMS = (0.11, 0.11, 0.11)
+BOX_DIMS = (0.15, 0.15, 0.13)
 
 EXP_POSES = {
   "starting_joints": [],
@@ -49,14 +49,27 @@ class ExampleMoveItTrajectories(object):
     rospy.init_node('touch-gs-controller')
     rospy.loginfo("Initializing Touch-GS controller")
     
-    # read pickle file for following trajectories if it exists
-    # if it does not exist, create it
-    try:
-      with open(PICKLE_PATH_FULL, "rb") as f:
-        self.exp_poses = pickle.load(f)
-        self.exp_poses_available = True
-    except FileNotFoundError:
-      self.exp_poses_available = False
+    """
+    Description of below parameters:
+    starting_views: number of views to start with. If should_collect_test_views in the launch file is True, we will collect this num of views and gracefully exit.
+    
+    num_views: number of views to add after the starting views. If should_collect_test_views is false, we will add this num of views.
+    
+    should_collect_experiment: if True, we will collect the experiment data and save it to a pickle file, or read the data in. If not, we do not create any pickle file and just add random views.
+    """
+    
+    self.starting_views = int(rospy.get_param("~starting_views", "5"))
+    self.num_views = int(rospy.get_param("~num_views", "10"))
+    self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
+    
+    # if should_collect_experiment is True, then we will collect the experiment data or read it in from pickle file
+    if self.should_collect_experiment:
+      try:
+        with open(PICKLE_PATH_FULL, "rb") as f:
+          self.exp_poses = pickle.load(f)
+          self.exp_poses_available = True
+      except FileNotFoundError:
+        self.exp_poses_available = False
 
     try:
       self.is_gripper_present = rospy.get_param(rospy.get_namespace() + "is_gripper_present", False)
@@ -199,6 +212,7 @@ class ExampleMoveItTrajectories(object):
     return pose.pose
 
   def reach_cartesian_pose(self, pose, tolerance, constraints):
+    """Reaches Cartesian Pose given the pose, tolerance and constraints"""
     arm_group = self.arm_group
     
     # Set the tolerance
@@ -216,7 +230,7 @@ class ExampleMoveItTrajectories(object):
     return arm_group.go(wait=True)
 
   def send_req_helper(self, client, req):
-    """ Send request helper """
+    """ Send request helper with ROS service"""
     while True:
       res = client(req)
 
@@ -271,8 +285,7 @@ class ExampleMoveItTrajectories(object):
     return pose_msg
   
   def run(self):
-    """ Run Method (Main Thread) """
-    
+    """ Run Controller Method (Main Thread) """
     success = self.is_init_success
     try:
         rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
@@ -283,8 +296,8 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       
-    start_views = 5
-    total_views_to_add = 20
+    start_views = self.starting_views
+    total_views_to_add = self.num_views
     view_type_ids = []
     for i in range(start_views):
       view_type_ids.append(0)
@@ -300,13 +313,13 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo(view_type_ids[i])
       
       # Sample views near the sphere until we have 10 poses
-      if self.exp_poses_available:
+      if self.exp_poses_available and self.should_collect_experiment:
         candidate_joints, pose_req.poses = self.get_exp_poses_at(i, view_type_ids[i])
        
       else:
         pose_cnt = 0
         while pose_cnt < self.num_poses:
-          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.12, 0.6)
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
           joints = self.pose_generator.calcIK(pose) 
 
           # make plans to reach the pose
@@ -317,7 +330,7 @@ class ExampleMoveItTrajectories(object):
             except: 
               success = False
               rospy.logwarn("Fail to Plan Trajectory")
-              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.12, 0.6)
+              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
               joints = self.pose_generator.calcIK(pose) 
           
           # if plan succeeds, we can add the pose as valid
@@ -373,20 +386,21 @@ class ExampleMoveItTrajectories(object):
           # skip other code and go to next view
           continue
         else: 
-          if view_type_ids[i] == 0:
-            EXP_POSES["starting_joints"].append(joints)
-            EXP_POSES["starting_poses"].append(pose)
-            
-          else:
-            # list of lists
-            EXP_POSES["candidate_joints"].append(candidate_joints)
-            EXP_POSES["candidate_poses"].append(pose_req.poses)
-            
-          # continually write EXP_POSES to file pickle
-          rospy.loginfo("Writing EXP_POSES")
-          # write pickle file
-          with open(PICKLE_PATH_FULL, "wb") as f:
-            pickle.dump(EXP_POSES, f)
+          if self.should_collect_experiment and not self.exp_poses_available:
+            if view_type_ids[i] == 0:
+              EXP_POSES["starting_joints"].append(joints)
+              EXP_POSES["starting_poses"].append(pose)
+              
+            else:
+              # list of lists
+              EXP_POSES["candidate_joints"].append(candidate_joints)
+              EXP_POSES["candidate_poses"].append(pose_req.poses)
+              
+            # continually write EXP_POSES to file pickle
+            rospy.loginfo("Writing EXP_POSES")
+            # write pickle file
+            with open(PICKLE_PATH_FULL, "wb") as f:
+              pickle.dump(EXP_POSES, f)
           
           i += 1
           
