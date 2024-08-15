@@ -1,0 +1,13 @@
+<launch>
+
+    <arg name="namespace" default="dt"/>
+    <arg name="ckpt" default="/home/user/model.pt"/>
+
+    <!-- Launch the example in that namespace -->
+    <node name="cam_ros" pkg="DenseTactNode" type="cam_ros.py" output="screen" ns="$(arg namespace)">
+        <param name="camname1" value="/dev/video0" />
+        <param name="ckpt" value="$(arg ckpt)"/>
+        <param name="caminfo" value="$(find DenseTactNode)/config/caminfo.yaml" />
+    </node>
+
+</launch>

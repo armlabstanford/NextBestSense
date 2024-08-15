@@ -4,3 +4,7 @@ devel/
 __pycache__/
 data/
 src/gaussian_splatting/gaussian_splatting_py/metric_depth/
+
+*.json
+fisherrf-renders/
+random-renders/
