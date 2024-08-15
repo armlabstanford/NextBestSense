@@ -44,6 +44,7 @@ class VisionNode(object):
         self.depth_cam_info_topic = rospy.get_param("~depth_cam_info_topic", "/camera_info")
         
         self.save_data = rospy.get_param("~save_data", "True")
+        self.should_collect_test_views = rospy.get_param("~should_collect_test_views", "False")
         self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/NextBestSense/data")
         self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/touch-gs-data/bunny_blender_data")
         
@@ -105,8 +106,6 @@ class VisionNode(object):
         
         self.data_base_dir = None
         self.gs_training_dir = None
-        self.only_generate_test_views = False
-
         rospy.loginfo("Vision Node Initialized")
         
 
@@ -159,7 +158,7 @@ class VisionNode(object):
         if self.save_data:
             gs_data_dir = self.save_images()
             
-        if self.only_generate_test_views:
+        if self.should_collect_test_views:
             res.message = "Test views done."
             return res
         

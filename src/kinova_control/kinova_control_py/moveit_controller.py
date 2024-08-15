@@ -1,31 +1,6 @@
 #!/usr/bin/env python3
 
-# Software License Agreement (BSD License)
-#
-# Copyright (c) 2013, SRI International
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-#  * Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#  * Redistributions in binary form must reproduce the above
-#    copyright notice, this list of conditions and the following
-#    disclaimer in the documentation and/or other materials provided
-#    with the distribution.
-#  * Neither the name of SRI International nor the names of its
-#    contributors may be used to endorse or promote products derived
-#    from this software without specific prior written permission.
-#
 # Author: Acorn Pooley, Mike Lautman, Boshu Lei, Matt Strong
-
-# Inspired from http://docs.ros.org/kinetic/api/moveit_tutorials/html/doc/move_group_python_interface/move_group_python_interface_tutorial.html
-# Modified by Alexandre Vannobel to test the FollowJointTrajectory Action Server for the Kinova Gen3 robot
-
-# To run this node in a given namespace with rosrun (for example 'my_gen3'), start a Kortex driver and then run : 
-# rosrun kortex_examples example_move_it_trajectories.py __ns:=my_gen3
 
 import sys
 
@@ -48,16 +23,12 @@ import kdl_parser_py.urdf as kdl_parser
 import PyKDL
 
 from typing import List
-
-from cv_bridge import CvBridge
-from sensor_msgs.msg import Image, CameraInfo
-
 import pickle
 
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
-BOX_DIMS = (0.15, 0.15, 0.13)
+BOX_DIMS = (0.11, 0.11, 0.11)
 
 EXP_POSES = {
   "starting_joints": [],
@@ -66,7 +37,7 @@ EXP_POSES = {
   "candidate_poses": []
 }
 
-PICKLE_PATH_FULL = '/home/user/NextBestSense/data/EXP_POSES_1.pkl'
+PICKLE_PATH_FULL = '/home/user/NextBestSense/data/EXP_POSES.pkl'
 
 class ExampleMoveItTrajectories(object):
   """ExampleMoveItTrajectories"""
@@ -75,10 +46,10 @@ class ExampleMoveItTrajectories(object):
     # Initialize the node
     super(ExampleMoveItTrajectories, self).__init__()
     moveit_commander.roscpp_initialize(sys.argv)
-    rospy.init_node('example_move_it_trajectories')
-    rospy.loginfo("Initializing ExampleMoveItTrajectories")
+    rospy.init_node('touch-gs-controller')
+    rospy.loginfo("Initializing Touch-GS controller")
     
-    # read pickle file if it exists
+    # read pickle file for following trajectories if it exists
     # if it does not exist, create it
     try:
       with open(PICKLE_PATH_FULL, "rb") as f:
@@ -148,9 +119,7 @@ class ExampleMoveItTrajectories(object):
 
     rospy.loginfo("Vision Node Services are available")
     
-    
     self.finish_training_service = rospy.Service("finish_training", Trigger, self.finishTrainingCb)
-    
     self.training_done = False
     
     
@@ -314,8 +283,8 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       
-    start_views = 4
-    total_views_to_add = 25
+    start_views = 5
+    total_views_to_add = 20
     view_type_ids = []
     for i in range(start_views):
       view_type_ids.append(0)
@@ -326,7 +295,6 @@ class ExampleMoveItTrajectories(object):
     i = 0
     
     while i < total_iters:
-      # Next Best View
       pose_req = NBVRequest()
       candidate_joints = []
       rospy.loginfo(view_type_ids[i])
@@ -338,7 +306,7 @@ class ExampleMoveItTrajectories(object):
       else:
         pose_cnt = 0
         while pose_cnt < self.num_poses:
-          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.15, 0.6)
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.12, 0.6)
           joints = self.pose_generator.calcIK(pose) 
 
           # make plans to reach the pose
@@ -349,7 +317,7 @@ class ExampleMoveItTrajectories(object):
             except: 
               success = False
               rospy.logwarn("Fail to Plan Trajectory")
-              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.15, 0.6)
+              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.12, 0.6)
               joints = self.pose_generator.calcIK(pose) 
           
           # if plan succeeds, we can add the pose as valid

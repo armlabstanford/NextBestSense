@@ -11,6 +11,7 @@
     <arg name="depth_cam_info_topic" default="/camera/depth/camera_info" />
 
     <arg name="save_data" default="True" />
+    <arg name="should_collect_test_views" default="False" />
 
     <!-- include other launch file -->
     <include file="$(find gaussian_splatting)/launch/vision.launch">
@@ -19,6 +20,7 @@
         <arg name="depth_image_topic" value="$(arg depth_image_topic)"/>
         <arg name="depth_cam_info_topic" value="$(arg depth_cam_info_topic)"/>
         <arg name="save_data" value="$(arg save_data)"/>
+        <arg name="should_collect_test_views" value="$(arg should_collect_test_views)"/>
     </include>
 
     <!-- Launch the controller node -->
