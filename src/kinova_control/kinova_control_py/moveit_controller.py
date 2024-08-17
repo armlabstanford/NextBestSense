@@ -15,9 +15,11 @@ import numpy as np
 from geometry_msgs.msg import PoseStamped, Pose
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
+from kortex_driver.msg import TwistCommand
+from pyquaternion import Quaternion
 
 from scipy.spatial.transform import Rotation as sciR
-from kinova_control_py.pose_util import RandomPoseGenerator
+from kinova_control_py.pose_util import RandomPoseGenerator, calcAngDiff
 
 import kdl_parser_py.urdf as kdl_parser
 import PyKDL
@@ -284,6 +286,160 @@ class ExampleMoveItTrajectories(object):
 
     return pose_msg
   
+  def vel_control(self):
+    """ Velocity Control """
+    vel_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=10)
+    command = TwistCommand()
+    # always choose the world frame
+    command.reference_frame = 0
+    command.twist.linear_x = 0.01
+    command.twist.linear_y = 0.
+    command.twist.linear_z = 0.
+    command.twist.angular_x = 0.
+    command.twist.angular_y = 0.
+    command.twist.angular_z = 0.
+    
+    for i in range(10):
+      vel_pub.publish(command)
+      rospy.sleep(0.1)
+    
+    return True
+  
+  def vel_approach(self, target_pose, start_pose, exec_time=10,
+                   trans_tolerate=0.002, ang_tolerate=0.01):
+    """ 
+    Use velocity control to approach the target pose 
+    
+    Use the Linear Interpolation for velocity control
+      A simple P controller is adopted to compute the velocity command.
+      
+    Should use feedback from the robot to determine the velocity command.
+    
+    Start Pose: The pose where the robot starts (x y z qx qy qz qw)
+    Target Pose: The pose where the robot wants to reach (x y z qx qy qz qw)
+    """ 
+      
+    rospy.loginfo("Starting Velocity Control")
+    rospy.loginfo("Move to Start Pose")
+    
+    joints = self.pose_generator.calcIK(start_pose) 
+    success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+    success = self.reach_joint_angles(joints) 
+    
+    # start velocity control
+    vel_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=10)
+    command = TwistCommand()
+    
+    rate = rospy.Rate(30)
+    start_time = rospy.Time.now().to_sec()
+    q_target = Quaternion(target_pose[6], target_pose[3], target_pose[4], target_pose[5])
+    q_start = Quaternion(start_pose[6], start_pose[3], start_pose[4], start_pose[5])
+    
+    while True:
+      current_time = rospy.Time.now().to_sec()
+      t = current_time - start_time
+      if t > exec_time + 0.1:
+        rospy.logwarn("Time Exceeded")
+        break
+      
+      # compute the execution time
+      t = min(t, exec_time)
+      
+      # compute pose error 
+      # get current pose
+      current_pose = self.get_cartesian_pose()
+      xcur = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z])
+      angcur = np.array([current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z, current_pose.orientation.w])
+      q_cur = Quaternion(angcur[3], angcur[0], angcur[1], angcur[2])
+      
+      trans_error = np.linalg.norm(xcur - target_pose[:3])
+      relative_q = q_cur.inverse * q_target
+      ang_error = abs(relative_q.angle)
+      
+      if trans_error < trans_tolerate and ang_error < ang_tolerate:
+        rospy.loginfo("Reached Target Pose")
+        break
+      
+      # linear interpolation
+      xdes = t / exec_time * (target_pose[:3] - start_pose[:3]) + start_pose[:3]
+      vdes = (target_pose[:3] - start_pose[:3]) / exec_time
+       
+      # P controller
+      v = 5 * (xdes - xcur) + vdes
+      # rospy.loginfo("Current v: {}".format(v))
+      
+      # compute the desired orientation
+      qdes = (t / exec_time) * q_target + (1 - t / exec_time) * q_start
+      qdes = qdes.normalised
+      q_dot = (q_target - q_start) / exec_time
+      ang_des = 2 * q_dot * qdes.inverse
+      ang_vdes = np.array([ang_des.x, ang_des.y, ang_des.z])
+      
+      rospy.loginfo("Current Ang Vel: {}".format(ang_vdes))
+      
+      Rdes = qdes.rotation_matrix
+      Rcur = q_cur.rotation_matrix
+      ang_diff = calcAngDiff(Rdes, Rcur)
+      ang_vel = 5 * ang_diff + ang_vdes
+      
+      rospy.loginfo("Current qdes: {}, qcur {}".format(qdes, q_cur))
+      rospy.loginfo("Current Ang Diff: {}".format(ang_diff))
+      
+      # convert to EE frame
+      ang_vel = Rcur.T @ ang_vel
+      
+      # set the velocity
+      command.reference_frame = 0
+      command.twist.linear_x = v[0]
+      command.twist.linear_y = v[1]
+      command.twist.linear_z = v[2]
+      command.twist.angular_x = ang_vel[0]
+      command.twist.angular_y = ang_vel[1]
+      command.twist.angular_z = ang_vel[2]
+      
+      vel_pub.publish(command)
+      rate.sleep()   
+      
+    # stop the robot
+    command.twist.linear_x = 0.
+    command.twist.linear_y = 0.
+    command.twist.linear_z = 0.
+    command.twist.angular_x = 0.
+    command.twist.angular_y = 0.
+    command.twist.angular_z = 0.
+    vel_pub.publish(command) 
+    
+    # compute the final pose error
+    current_pose = self.get_cartesian_pose()
+    xcur = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z])
+    angcur = np.array([current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z, current_pose.orientation.w])
+    q_cur = Quaternion(angcur[3], angcur[0], angcur[1], angcur[2])
+    
+    trans_error = np.linalg.norm(xcur - target_pose[:3])
+    relative_q = q_cur.inverse * q_target
+    ang_error = abs(relative_q.angle)
+    rospy.loginfo("Trans Error: {}, Ang Error {}".format(trans_error, ang_error))
+    
+  # Test Function
+  def TestVelControl(self):
+    """ Test Velocity Control """
+    rospy.loginfo("Testing Velocity Control")
+    current_pose = self.get_cartesian_pose()
+    q_cur = Quaternion(current_pose.orientation.w, current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z)
+    delta_q = Quaternion(axis=[0, 1, 0], angle=np.pi / 2)
+    q_start = delta_q * q_cur # * delta_q
+    
+    # delta_q2 = Quaternion(axis=[1, 0, 0], angle=np.pi / 6)
+    q_end = q_start
+    
+    start_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z, 
+                           q_start.x, q_start.y, q_start.z, q_start.w])
+    target_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z - 0.1, 
+                            q_end.x, q_end.y, q_end.z, q_end.w])
+    
+    self.vel_approach(target_pose, start_pose, exec_time=5)
+    return
+    
   def run(self):
     """ Run Controller Method (Main Thread) """
     success = self.is_init_success
@@ -295,6 +451,9 @@ class ExampleMoveItTrajectories(object):
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
+    
+    import pdb; pdb.set_trace()
+    self.TestVelControl()
       
     start_views = self.starting_views
     total_views_to_add = self.num_views
