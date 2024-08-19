@@ -564,7 +564,7 @@ class DenseDepth(nn.Module):
 
         x = self.encoder(x)
         x = self.decoder(x)
-        x = x* self.max_depth
+        x = x * self.max_depth
         return x
 
 

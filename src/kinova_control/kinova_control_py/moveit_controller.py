@@ -3,34 +3,41 @@
 # Author: Acorn Pooley, Mike Lautman, Boshu Lei, Matt Strong
 
 import sys
-
+from typing import List
+import pickle
+import numpy as np
+from pyquaternion import Quaternion
+from scipy.spatial.transform import Rotation as sciR
 from matplotlib import pyplot as plt
 sys.path.append('/miniconda/envs/densetact/lib/python3.8/site-packages')
 
 import rospy
 import moveit_commander
+from cv_bridge import CvBridge
+
 import moveit_msgs.msg
 import geometry_msgs.msg
-import numpy as np
 from geometry_msgs.msg import PoseStamped, Pose
+from sensor_msgs.msg import Image, CameraInfo
+from kortex_driver.msg import TwistCommand
+
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
-from kortex_driver.msg import TwistCommand
-from pyquaternion import Quaternion
 
-from scipy.spatial.transform import Rotation as sciR
+# tf buffer
+import tf2_ros
+
 from kinova_control_py.pose_util import RandomPoseGenerator, calcAngDiff
+from kinova_control_py.status import *
+from kinova_control_py.april_tag_detector import detect_img
 
 import kdl_parser_py.urdf as kdl_parser
 import PyKDL
 
-from typing import List
-import pickle
-
-
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
 BOX_DIMS = (0.15, 0.15, 0.13)
+DEPTH_DEFORM_THRESH = 95
 
 EXP_POSES = {
   "starting_joints": [],
@@ -50,6 +57,10 @@ class ExampleMoveItTrajectories(object):
     moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node('touch-gs-controller')
     rospy.loginfo("Initializing Touch-GS controller")
+    self.bridge = CvBridge()
+
+    self.tfBuffer = tf2_ros.Buffer()
+    self.listener = tf2_ros.TransformListener(self.tfBuffer)
     
     """
     Description of below parameters:
@@ -101,7 +112,7 @@ class ExampleMoveItTrajectories(object):
       box_pose.header.frame_id = 'base_link'
       box_name = "box"
       # add box to the scene. In the future, resize to object size in GS
-      self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
+      # self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
       rospy.loginfo("Added box to the scene")
 
       if self.is_gripper_present:
@@ -110,7 +121,7 @@ class ExampleMoveItTrajectories(object):
 
       rospy.loginfo("Initializing node in namespace " + rospy.get_namespace())
     except Exception as e:
-      print (e)
+      print(e)
       self.is_init_success = False
     else:
       self.is_init_success = True
@@ -132,11 +143,28 @@ class ExampleMoveItTrajectories(object):
     self.nbv_client = rospy.ServiceProxy("/next_best_view", NBV)
     self.save_model_client = rospy.ServiceProxy("/save_model", SaveModel)
 
+    DT_DEPTH_TOPIC = "/RunCamera/imgDepth"
+    img: Image = rospy.wait_for_message(DT_DEPTH_TOPIC, Image)
+    self.dt_deform_thresh = False # if True, means the DT sensor exceeds the threshold, and should be stopped
+    self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+
+    self.depthImg_sub = rospy.Subscriber(DT_DEPTH_TOPIC, Image, self.depthImgCb)
+
     rospy.loginfo("Vision Node Services are available")
     
     self.finish_training_service = rospy.Service("finish_training", Trigger, self.finishTrainingCb)
     self.training_done = False
+
+  def depthImgCb(self, msg:Image):
+    """ DT Depth Image Callback """
+    # convert to numpy array
+    img_np = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+
+    depth_deformation = np.abs(img_np - self.depth_undeformed).mean()
+    if depth_deformation > DEPTH_DEFORM_THRESH and not self.dt_deform_thresh:
+      rospy.logwarn("Depth Deformation is too high DIff {}".format(depth_deformation))
     
+    self.dt_deform_thresh = depth_deformation > DEPTH_DEFORM_THRESH
     
   def finishTrainingCb(self, req) -> TriggerResponse:
       """ AddVision Cb 
@@ -306,7 +334,7 @@ class ExampleMoveItTrajectories(object):
     return True
   
   def vel_approach(self, target_pose, start_pose, exec_time=10,
-                   trans_tolerate=0.002, ang_tolerate=0.01):
+                   trans_tolerate=0.002, ang_tolerate=0.01, dt_safety_check=True):
     """ 
     Use velocity control to approach the target pose 
     
@@ -317,6 +345,8 @@ class ExampleMoveItTrajectories(object):
     
     Start Pose: The pose where the robot starts (x y z qx qy qz qw)
     Target Pose: The pose where the robot wants to reach (x y z qx qy qz qw)
+    dt_safety_check: If True, when the depth sensor exceeds the threshold, stop the robot
+                  disable it when you are sure the sensor is moving away from the object 
     """ 
       
     rospy.loginfo("Starting Velocity Control")
@@ -324,7 +354,14 @@ class ExampleMoveItTrajectories(object):
     
     joints = self.pose_generator.calcIK(start_pose) 
     success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+    if not success:
+      rospy.logwarn("Fail to Plan Trajectory")
+      return PLAN_FAILURE
+    
     success = self.reach_joint_angles(joints) 
+    if not success:
+      rospy.logwarn("Fail to Reach Joint Angles")
+      return EXECUTION_FAILURE
     
     # start velocity control
     vel_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=10)
@@ -334,12 +371,19 @@ class ExampleMoveItTrajectories(object):
     start_time = rospy.Time.now().to_sec()
     q_target = Quaternion(target_pose[6], target_pose[3], target_pose[4], target_pose[5])
     q_start = Quaternion(start_pose[6], start_pose[3], start_pose[4], start_pose[5])
-    
+
+    status = SUCCESS
     while True:
       current_time = rospy.Time.now().to_sec()
       t = current_time - start_time
       if t > exec_time + 0.1:
         rospy.logwarn("Time Exceeded")
+        status = TIME_EXCEEDED
+        break
+
+      if dt_safety_check and self.dt_deform_thresh:
+        rospy.logwarn("Depth Deformation Exceeded")
+        status = DT_THRESHOLD_EXCEED
         break
       
       # compute the execution time
@@ -389,6 +433,8 @@ class ExampleMoveItTrajectories(object):
       ang_vel = Rcur.T @ ang_vel
       
       # set the velocity
+      # the velocity is in the base frame
+      # the angular velocity is in the end effector frame
       command.reference_frame = 0
       command.twist.linear_x = v[0]
       command.twist.linear_y = v[1]
@@ -419,27 +465,135 @@ class ExampleMoveItTrajectories(object):
     relative_q = q_cur.inverse * q_target
     ang_error = abs(relative_q.angle)
     rospy.loginfo("Trans Error: {}, Ang Error {}".format(trans_error, ang_error))
+
+    return status
+
+  def touch_pose(self, pose, distance = 0.1):
+    """ 
+    Get One touch at the pose
     
-  # Test Function
-  def TestVelControl(self):
-    """ Test Velocity Control """
-    rospy.loginfo("Testing Velocity Control")
+    pose: The pose where the robot starts (x y z qx qy qz qw)
+    distance: The distance to move the robot in the direction of the pose
+    """ 
+    touch_q = Quaternion(pose[6], pose[3], pose[4], pose[5])
+    touch_pos = np.array([pose[0], pose[1], pose[2]])
+    rot = touch_q.rotation_matrix
+
+    # the z-axis is the normal
+    axis_z = rot[:, 2]
+    start_pos = touch_pos - distance * axis_z
+
+    start_pose = np.array([start_pos[0], start_pos[1], start_pos[2], 
+                           pose[3], pose[4], pose[5], pose[6]])
+
+    status = self.vel_approach(pose, start_pose, exec_time=6)
+
+    if status == SUCCESS or status == DT_THRESHOLD_EXCEED:
+      # add the touch
+      # call the touch service
+      pass
+
+      # TODO Call the Touch Service 
+
+
+      # return to the start pose
+      # get current pose 
+      current_pose = self.get_cartesian_pose()
+      current_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z, 
+                               current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z, current_pose.orientation.w])
+      self.vel_approach(start_pose, current_pose, exec_time=3, dt_safety_check=False)
+    
+    elif status == PLAN_FAILURE or status == EXECUTION_FAILURE:
+      rospy.logwarn("Fail to Reach Target Pose")
+      # since the robot does not move, just return is OK
+
+    elif status == TIME_EXCEEDED:
+      # pure time exceed, no idea now
+      pass
+
+    return status
+  
+  def board_demo(self):
+    """ Board Demo using Aruco Marker"""
     current_pose = self.get_cartesian_pose()
     q_cur = Quaternion(current_pose.orientation.w, current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z)
     delta_q = Quaternion(axis=[0, 1, 0], angle=np.pi / 2)
     q_start = delta_q * q_cur # * delta_q
+
+    # move to the observe pose
+    observe_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z,
+                              q_start.x, q_start.y, q_start.z, q_start.w])
+    joints = self.pose_generator.calcIK(observe_pose) 
+    success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+    if not success:
+      rospy.logwarn("Fail to Plan Trajectory")
+      return PLAN_FAILURE
     
-    # delta_q2 = Quaternion(axis=[1, 0, 0], angle=np.pi / 6)
-    q_end = q_start
+    success = self.reach_joint_angles(joints) 
+    if not success:
+      rospy.logwarn("Fail to Reach Joint Angles")
+      return EXECUTION_FAILURE
     
-    start_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z, 
-                           q_start.x, q_start.y, q_start.z, q_start.w])
-    target_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z - 0.1, 
-                            q_end.x, q_end.y, q_end.z, q_end.w])
+    img = rospy.wait_for_message("/camera/color/image_raw", Image)
+    img_np = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+    # # copy the data so that it owns the data
+    # img_cv = img_np.copy()
+
+    # get the camera matrix
+    camera_info = rospy.wait_for_message("/camera/color/camera_info", CameraInfo)
+    K = np.array(camera_info.K).reshape(3, 3)
+
+    # detect the aruco marker
+    success, w2c = detect_img(img_np, K)
+
+    if not success:
+      rospy.logwarn("Fail to detect Aruco Marker")
+      return EXECUTION_FAILURE
+  
+    # get camera link to base link
+    try:
+      transform = self.tfBuffer.lookup_transform("base_link", img.header.frame_id, rospy.Time())
+    except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+      rospy.logwarn("Fail to lookup transform from camera to base_link")
+      return EXECUTION_FAILURE
+
+    # get the pose of the aruco marker in the base link
+    c2b = np.eye(4)
+    c2b[:3, 3] = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
+    q = transform.transform.rotation
+    q = Quaternion(q.w, q.x, q.y, q.z)
+    c2b[:3, :3] = q.rotation_matrix
+
+    # get the pose of the aruco marker in the world frame
+    w2b = c2b @ w2c
     
-    self.vel_approach(target_pose, start_pose, exec_time=5)
-    return
+    # sample pose on the board
+    board_x = np.linspace(2, 10, 2) / 100
+    board_y = np.linspace(2, 10, 2) / 100
+
+    board_coord = np.meshgrid(board_x, board_y)
+    board_coord = np.array(board_coord).reshape(2, -1).T
+    board_coord = np.hstack([board_coord, np.zeros((board_coord.shape[0], 1))])
+
+    # get the pose in the world frame
+    board_coord = np.hstack([board_coord, np.ones((board_coord.shape[0], 1))])
+    board_coord = w2b @ board_coord.T
+    board_coord = board_coord[:3].T
+
+    # up right down towards the board
+    # rot = np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]])
+    touch_q = q_start
     
+    # move to the board
+    for i in range(board_coord.shape[0]):
+      touch_pos = board_coord[i]
+      touch_pose = np.array([touch_pos[0], touch_pos[1], touch_pos[2], touch_q.x, touch_q.y, touch_q.z, touch_q.w])
+      
+      status = self.touch_pose(touch_pose)
+      if status != SUCCESS and status != DT_THRESHOLD_EXCEED:
+        rospy.logwarn("Fail to Touch the Board")
+        return status
+
   def run(self):
     """ Run Controller Method (Main Thread) """
     success = self.is_init_success
@@ -453,7 +607,7 @@ class ExampleMoveItTrajectories(object):
       success &= self.reach_named_position("home")
     
     import pdb; pdb.set_trace()
-    self.TestVelControl()
+    self.board_demo()
       
     start_views = self.starting_views
     total_views_to_add = self.num_views

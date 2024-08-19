@@ -116,8 +116,8 @@ class RunCamera:
                 self.model_pos = DenseDepth(max_depth = 256, pretrained = False)
                 self.ispf = 'pos'
                 self.model_pos = torch.nn.DataParallel(self.model_pos)
-                # checkpoint_pos = torch.load(modelname)
-                # self.model_pos.load_state_dict(checkpoint_pos['model'])
+                checkpoint_pos = torch.load(modelname)
+                self.model_pos.load_state_dict(checkpoint_pos['model'])
                 self.model_pos.eval()
                 self.model_pos.cuda()
                 # self.imgDepth = self.img2Depth(np.ones((640,640,3)))
@@ -126,8 +126,8 @@ class RunCamera:
                 self.model_force = DenseNet_Force(pretrained = False)
                 self.ispf = 'force'
                 self.model_force = torch.nn.DataParallel(self.model_force)
-                # checkpoint_force = torch.load(modelname)
-                # self.model_force.load_state_dict(checkpoint_force['model'])
+                checkpoint_force = torch.load(modelname)
+                self.model_force.load_state_dict(checkpoint_force['model'])
                 self.model_force.eval()
                 self.model_force.cuda()
                 # self.imgForce = self.img2Force(np.ones((640,640,3)))
@@ -297,26 +297,26 @@ class RunCamera:
 
             ################## depth / force ###########
             if netuse: 
-                    if self.isforce == 1:
-                        forceEst = getForce(self.model_force, rectImg)
-                        # print("Force: ", forceEst)
-                        wrench_stamped_msg = WrenchStamped()
-                            # Set the force and torque values in the message
-                        wrench_stamped_msg.header.stamp = rospy.Time.now()
-                        wrench_stamped_msg.wrench.force = Vector3(*forceEst[:3])
-                        wrench_stamped_msg.wrench.torque = Vector3(*forceEst[3:])
-                        self.force_pub.publish(wrench_stamped_msg)
-                    if self.ispos == 1:
-                        # depthImg = self.imgDepth(rectImg)
-                        depthImg = getDepth(self.model_pos, rectImg)
-                        msg_depth = self.br.cv2_to_imgmsg(depthImg, "8UC1")
-                        msg_depth.header.stamp = rospy.get_rostime()
-                        self.img_pub_depth.publish(msg_depth)
+                if self.isforce == 1:
+                    forceEst = getForce(self.model_force, rectImg)
+                    # print("Force: ", forceEst)
+                    wrench_stamped_msg = WrenchStamped()
+                        # Set the force and torque values in the message
+                    wrench_stamped_msg.header.stamp = rospy.Time.now()
+                    wrench_stamped_msg.wrench.force = Vector3(*forceEst[:3])
+                    wrench_stamped_msg.wrench.torque = Vector3(*forceEst[3:])
+                    self.force_pub.publish(wrench_stamped_msg)
+                if self.ispos == 1:
+                    # import pdb; pdb.set_trace()
+                    depthImg = getDepth(self.model_pos, rectImg)
+                    msg_depth = self.br.cv2_to_imgmsg(depthImg, "8UC1")
+                    msg_depth.header.stamp = rospy.get_rostime()
+                    self.img_pub_depth.publish(msg_depth)
 
-                        imgDepth_rgb = cv2.cvtColor(depthImg, cv2.COLOR_GRAY2RGB)
-                        msg_depthshow = self.br.cv2_to_imgmsg(imgDepth_rgb, "rgb8")
-                        msg_depthshow.header.stamp = rospy.get_rostime()
-                        self.img_pub_depth_show.publish(msg_depthshow)
+                    imgDepth_rgb = cv2.cvtColor(depthImg, cv2.COLOR_GRAY2RGB)
+                    msg_depthshow = self.br.cv2_to_imgmsg(imgDepth_rgb, "rgb8")
+                    msg_depthshow.header.stamp = rospy.get_rostime()
+                    self.img_pub_depth_show.publish(msg_depthshow)
             else:
                 print('please make netuse True')
 

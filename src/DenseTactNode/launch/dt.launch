@@ -1,7 +1,7 @@
 <launch>
 
     <arg name="namespace" default="dt"/>
-    <arg name="ckpt" default="/home/user/model.pt"/>
+    <arg name="ckpt" default="$(find DenseTactNode)/position_sensor_102.pth"/>
 
     <!-- Launch the example in that namespace -->
     <node name="cam_ros" pkg="DenseTactNode" type="cam_ros.py" output="screen" ns="$(arg namespace)">

@@ -6,5 +6,6 @@ data/
 src/gaussian_splatting/gaussian_splatting_py/metric_depth/
 
 *.json
+*.pth
 fisherrf-renders/
 random-renders/
