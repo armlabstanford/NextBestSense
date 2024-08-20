@@ -37,7 +37,6 @@ import PyKDL
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
 BOX_DIMS = (0.15, 0.15, 0.13)
-DEPTH_DEFORM_THRESH = 95
 
 EXP_POSES = {
   "starting_joints": [],
@@ -46,7 +45,7 @@ EXP_POSES = {
   "candidate_poses": []
 }
 
-PICKLE_PATH_FULL = '/home/user/NextBestSense/data/EXP_POSES.pkl'
+PICKLE_PATH_FULL = 'EXP_POSES.pkl'
 
 class ExampleMoveItTrajectories(object):
   """ExampleMoveItTrajectories"""
@@ -148,6 +147,8 @@ class ExampleMoveItTrajectories(object):
     self.dt_deform_thresh = False # if True, means the DT sensor exceeds the threshold, and should be stopped
     self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 
+    self.dt_deform_threshold_value = rospy.get_param("~dt_deform_threshold_value", 95)
+    rospy.loginfo("Depth Deformation Threshold Value: {}".format(self.dt_deform_threshold_value))
     self.depthImg_sub = rospy.Subscriber(DT_DEPTH_TOPIC, Image, self.depthImgCb)
 
     rospy.loginfo("Vision Node Services are available")
@@ -161,10 +162,10 @@ class ExampleMoveItTrajectories(object):
     img_np = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
 
     depth_deformation = np.abs(img_np - self.depth_undeformed).mean()
-    if depth_deformation > DEPTH_DEFORM_THRESH and not self.dt_deform_thresh:
+    if depth_deformation > self.dt_deform_threshold_value and not self.dt_deform_thresh:
       rospy.logwarn("Depth Deformation is too high DIff {}".format(depth_deformation))
     
-    self.dt_deform_thresh = depth_deformation > DEPTH_DEFORM_THRESH
+    self.dt_deform_thresh = depth_deformation > self.dt_deform_threshold_value
     
   def finishTrainingCb(self, req) -> TriggerResponse:
       """ AddVision Cb 
@@ -568,8 +569,8 @@ class ExampleMoveItTrajectories(object):
     w2b = c2b @ w2c
     
     # sample pose on the board
-    board_x = np.linspace(2, 10, 2) / 100
-    board_y = np.linspace(2, 10, 2) / 100
+    board_x = np.linspace(2, 8, 3) / 100
+    board_y = np.linspace(2, 8, 3) / 100
 
     board_coord = np.meshgrid(board_x, board_y)
     board_coord = np.array(board_coord).reshape(2, -1).T
@@ -606,8 +607,8 @@ class ExampleMoveItTrajectories(object):
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
     
-    import pdb; pdb.set_trace()
-    self.board_demo()
+    # Board Demo for the touch sensor
+    # self.board_demo()
       
     start_views = self.starting_views
     total_views_to_add = self.num_views

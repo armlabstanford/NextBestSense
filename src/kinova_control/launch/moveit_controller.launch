@@ -32,6 +32,7 @@
         <param name="starting_views" value="$(arg starting_views)"/>
         <param name="num_views" value="$(arg num_views)"/>
         <param name="should_collect_experiment" value="$(arg should_collect_experiment)"/>
+        <param name="dt_deform_threshold_value" value="145"/>
     </node>
 
 </launch>
