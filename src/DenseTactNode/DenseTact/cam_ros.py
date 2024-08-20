@@ -311,11 +311,13 @@ class RunCamera:
                     depthImg = getDepth(self.model_pos, rectImg)
                     msg_depth = self.br.cv2_to_imgmsg(depthImg, "8UC1")
                     msg_depth.header.stamp = rospy.get_rostime()
+                    msg_depth.header.frame_id = "touch"
                     self.img_pub_depth.publish(msg_depth)
 
                     imgDepth_rgb = cv2.cvtColor(depthImg, cv2.COLOR_GRAY2RGB)
                     msg_depthshow = self.br.cv2_to_imgmsg(imgDepth_rgb, "rgb8")
                     msg_depthshow.header.stamp = rospy.get_rostime()
+                    msg_depthshow.header.frame_id = "touch"
                     self.img_pub_depth_show.publish(msg_depthshow)
             else:
                 print('please make netuse True')
