@@ -150,21 +150,16 @@ class SAM2(SAM2AutomaticMaskGenerator):
             # perform alignment on mask
             mde_mask = mde_depth[bool_mask]
             real_mask = real_depth[bool_mask]
-            
             scale, offset = learn_scale_and_offset_raw(mde_mask, real_mask)
             
             # update mde
             mde_depth[bool_mask] = mde_depth[bool_mask] * scale + offset
             # remove negative values
             mde_depth[mde_depth < 0] = 0
-            
-            
-            # background mask is and with the inverse of the mask
             background_mask = background_mask * (1 - mask)
         
-        # convert background mask to bool
+        # TODO -- see if this is messing up the predictions
         background_mask = background_mask.astype(bool)
-        
         mde_mask = mde_depth[background_mask]
         real_mask = real_depth[background_mask]
         
@@ -181,7 +176,10 @@ class SAM2(SAM2AutomaticMaskGenerator):
         
         print(f"Diff: {diff}")
         print("Masks generated.")
-        # save the final aligned mde depth
+        
+        
+        # save the final aligned mde depth and remove negative values
+        mde_depth[mde_depth < 0] = 0
         mde_depth = (mde_depth * 1000).astype(np.uint16)
         
         # get root path from img_path
