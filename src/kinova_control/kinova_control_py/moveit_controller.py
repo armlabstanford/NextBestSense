@@ -74,8 +74,10 @@ class TouchGSController(object):
     self.starting_views = int(rospy.get_param("~starting_views", "5"))
     self.added_views = int(rospy.get_param("~added_views", "10"))
     self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
+    self.use_touch = bool(rospy.get_param("~use_touch", "False"))
     
     # if should_collect_experiment is True, then we will collect the experiment data or read it in from pickle file
+    self.exp_poses_available = False
     if self.should_collect_experiment:
       try:
         with open(PICKLE_PATH_FULL, "rb") as f:
@@ -145,14 +147,15 @@ class TouchGSController(object):
     self.save_model_client = rospy.ServiceProxy("/save_model", SaveModel)
     self.get_gs_data_dir_client = rospy.ServiceProxy("/get_gs_data_dir", Trigger)
 
-    DT_DEPTH_TOPIC = "/RunCamera/imgDepth"
-    img: Image = rospy.wait_for_message(DT_DEPTH_TOPIC, Image)
-    self.dt_deform_thresh = False # if True, means the DT sensor exceeds the threshold, and should be stopped
-    self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+    if self.use_touch:
+      DT_DEPTH_TOPIC = "/RunCamera/imgDepth"
+      img: Image = rospy.wait_for_message(DT_DEPTH_TOPIC, Image)
+      self.dt_deform_thresh = False # if True, means the DT sensor exceeds the threshold, and should be stopped
+      self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 
-    self.dt_deform_threshold_value = rospy.get_param("~dt_deform_threshold_value", 95)
-    rospy.loginfo("Depth Deformation Threshold Value: {}".format(self.dt_deform_threshold_value))
-    self.depthImg_sub = rospy.Subscriber(DT_DEPTH_TOPIC, Image, self.depthImgCb)
+      self.dt_deform_threshold_value = rospy.get_param("~dt_deform_threshold_value", 95)
+      rospy.loginfo("Depth Deformation Threshold Value: {}".format(self.dt_deform_threshold_value))
+      self.depthImg_sub = rospy.Subscriber(DT_DEPTH_TOPIC, Image, self.depthImgCb)
 
     rospy.loginfo("Vision Node Services are available")
     
@@ -220,7 +223,6 @@ class TouchGSController(object):
     arm_group.set_named_target(target)
     # Plan the trajectory
     (success_flag, trajectory_message, planning_time, error_code) = arm_group.plan()
-    print(success_flag, planning_time, error_code)
     # Execute the trajectory and block while it's not finished
     return arm_group.execute(trajectory_message, wait=True)
 
@@ -657,7 +659,7 @@ class TouchGSController(object):
 
     return candidate_joints, pose_req.poses
   
-  def get_candidate_joints_and_poses(self, i, pose_req):
+  def get_candidate_joints_and_poses(self, i):
     """ Get Candidate Joints and Poses """
     pose_req = NBVRequest()
     if self.exp_poses_available and self.should_collect_experiment:
@@ -690,11 +692,12 @@ class TouchGSController(object):
     return joints, pose
   
 
-  def goto_pose(self, joints, sorted_by_score_joints=None):
+  def goto_pose(self, i, joints, sorted_by_score_joints=None):
     joint_configuration_idx = 0
+    success = True
     try:
       success &= self.reach_joint_angles(joints)
-      if self.view_type_ids[i] == ADDING_VIEW_ID 
+      if self.view_type_ids[i] == ADDING_VIEW_ID:
         if success:
           rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
 
@@ -741,20 +744,23 @@ class TouchGSController(object):
 
   def vision_phase(self):
     """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
+    import pdb; pdb.set_trace()
+
     i = 0
     while i < self.total_views:
-      candidate_joints, pose_req = self.get_candidate_joints_and_poses(i, pose_req)
+      candidate_joints, pose_req = self.get_candidate_joints_and_poses(i)
 
       if self.view_type_ids[i] == STARTING_VIEW_ID:
         joints, pose = self.select_starting_view(candidate_joints, pose_req)
-        
+        import pdb; pdb.set_trace()
+
       elif self.view_type_ids[i] == ADDING_VIEW_ID:
         sorted_joints  = self.call_nbv(pose_req)
         joints = sorted_joints[0]
         
       # reach the view
       if joints is not None:
-        success = self.goto_pose(joints, sorted_joints)
+        success = self.goto_pose(i, joints, None)
           
         if not success:
           rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
@@ -762,10 +768,13 @@ class TouchGSController(object):
         else: 
           self.add_to_experiment_if_needed(joints, pose, candidate_joints, i, pose_req)
           i += 1
-          
+        
+        import pdb; pdb.set_trace()
         self.call_add_view_client()
 
         if i >= self.starting_views:
+          import pdb; pdb.set_trace()
+
           self.update_gs_model(success)
 
   def touch_phase(self, gaussian_splatting_data_dir):
@@ -775,7 +784,7 @@ class TouchGSController(object):
     At this point, we have set all views. We now continue to the Touch phase.
 
     1. Generate candidate poses from GS for touch (provided with segmented object in GS)
-    2. Send candidate poses to GS to compute the next best touch pose
+    2. Send candidate poses to GS to compute the next best touch pose.
     3. Get the next best touch pose and move the robot to that pose for touch.
     4. Get touch data and save it to the GS model. This includes directly injecting Gaussians into the scene and updating the views.
     5. Train model n steps and repeat the process.

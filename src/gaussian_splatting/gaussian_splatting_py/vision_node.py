@@ -45,8 +45,8 @@ class VisionNode(object):
         
         self.save_data = rospy.get_param("~save_data", "True")
         self.should_collect_test_views = rospy.get_param("~should_collect_test_views", "False")
-        self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/NextBestSense/data")
-        self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/touch-gs-data/bunny_blender_data")
+        self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/Documents/NextBestSense/data")
+        self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/Documents./touch-gs-data/bunny_blender_data")
         
         # GS model
         self.gs_training = False
@@ -202,7 +202,7 @@ class VisionNode(object):
             cv2.imwrite(mde_depth_path, predicted_depth)
             
             # hack with python3.11 to run SAM2 depth alignment
-            os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/run_sam2.py --img_path {img_path} --real_depth {depth_path} --mde_depth_path {mde_depth_path}")
+            os.system(f"python3.11 /home/user/Documents/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/run_sam2.py --img_path {img_path} --real_depth {depth_path} --mde_depth_path {mde_depth_path}")
             
             # read from mde_depth_aligned.png
             depth_np = cv2.imread(osp.join(self.save_data_dir, "mde_depth_aligned.png"), cv2.IMREAD_UNCHANGED) / 1000.0
@@ -431,7 +431,7 @@ class VisionNode(object):
         rospy.loginfo(f"Saved all images to {self.gs_training_dir}. Now generating masks in SAM2...")
         
         # construct sam2 masks
-        os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --data_dir {self.gs_training_dir}")
+        os.system(f"python3.11 /home/user/Documents/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --data_dir {self.gs_training_dir}")
         
         return self.gs_training_dir
     
