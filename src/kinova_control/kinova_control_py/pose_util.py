@@ -247,6 +247,19 @@ class RandomPoseGenerator(PoseSolver):
 
       return pose
 
+def calcAngDiff(R_des, R_curr):
+    """
+    Calculate the angular difference between two rotation matrices.
+    """
+    omega = np.zeros((3, ))
+    
+    delta_R = R_curr.T @ R_des 
+    S = (delta_R - delta_R.T) / 2
+    
+    omega = np.array([S[2, 1], S[0, 2], S[1, 0]])
+    omega = R_curr @ omega
+    return omega
+
 if __name__ == '__main__':
   solver = PoseSolver()
   pose = np.array([0.1, 0.1, 0.1, 0, 0, 0, 1])

@@ -167,6 +167,7 @@ class SAM2(SAM2AutomaticMaskGenerator):
         
         # update mde
         mde_depth[background_mask] = mde_depth[background_mask] * scale + offset
+        mde_depth[mde_depth < 0] = 0
         
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
         
@@ -201,7 +202,6 @@ if __name__ == '__main__':
     
     
     Sam2 = SAM2()
-    
     Sam2.generate(img_path=args.img_path, 
                   mde_depth_path=args.mde_depth_path, 
                   real_depth=args.real_depth)
