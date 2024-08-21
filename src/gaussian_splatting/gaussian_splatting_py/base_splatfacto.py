@@ -24,16 +24,12 @@ class ROSSplatfacto(ABC):
         When add view service is called, we take the current image, add it to the transforms.json file, and save the image. [GS waits]
         
         Then we resume GS training.
-        
         """
         self.data_dir = data_dir
         self.render_uncertainty = render_uncertainty
         self.train_split_fraction = train_split_fraction
         self.depth_uncertainty_weight = depth_uncertainty_weight
         self.rgb_uncertainty_weight = rgb_uncertainty_weight
-        
-        # service for Nerfstudio to get the list of poses
-        
         
     
     @abstractmethod

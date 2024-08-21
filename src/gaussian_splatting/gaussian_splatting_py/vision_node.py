@@ -69,6 +69,7 @@ class VisionNode(object):
         self.nbv_get_poses_srv = rospy.Service("get_poses", NBVPoses, self.getNBVPoses)
         self.nbv_get_poses_srv = rospy.Service("receive_nbv_scores", NBVResult, self.receiveNBVScoresGS)
         self.savemodel_srv = rospy.Service("save_model", SaveModel, self.saveModelCb)
+        self.get_gs_data_dir_srv = rospy.Service("get_gs_data_dir", Trigger, self.getGSDataDirCb)
         
         # wait for image topic
         rospy.loginfo("Waiting for camera topic")
@@ -77,14 +78,12 @@ class VisionNode(object):
         
         # wait for depth image topic
         rospy.loginfo("Waiting for depth camera topic")
-        rospy.loginfo(self.DEPTH_CAMERA_TOPIC)
-        
         rospy.wait_for_message(self.DEPTH_CAMERA_TOPIC, Image)
         rospy.loginfo("Depth Camera topic found")
         self.bridge = CvBridge()
         
         # get camera infos 
-        rospy.loginfo("Waiting for camera info")
+        rospy.loginfo("Waiting for camera infos")
         self.color_cam_info: CameraInfo = rospy.wait_for_message(self.cam_info_topic, CameraInfo)
         self.depth_cam_info: CameraInfo = rospy.wait_for_message(self.depth_cam_info_topic, CameraInfo)
 
@@ -101,9 +100,7 @@ class VisionNode(object):
 
         self.tfBuffer = tf2.Buffer()
         self.listener = tf2.TransformListener(self.tfBuffer)
-        
         self.idx = 0
-        
         self.data_base_dir = None
         self.gs_training_dir = None
         rospy.loginfo("Vision Node Initialized")
@@ -185,7 +182,6 @@ class VisionNode(object):
         
         res.message = "Success"
         return res
-    
     
     def align_depth(self, depth: np.ndarray, predicted_depth: np.ndarray, 
                     rgb: np.ndarray, use_sam: bool = False) -> np.ndarray:
@@ -302,6 +298,13 @@ class VisionNode(object):
             rospy.loginfo(f"Added view to the dataset with {len(self.images)} images")
         return res
     
+    def getGSDataDirCb(self, req: TriggerRequest) -> TriggerResponse:
+        """ Get GS Data Dir Callback """
+        res = TriggerResponse()
+        res.success = True
+        res.message = self.gs_data_dir
+        return res
+
     def getNBVPoses(self, req: NBVPosesRequest) -> NBVPosesResponse:
         """ Get Next Best View Poses to send to GS
 
@@ -368,7 +371,6 @@ class VisionNode(object):
         # get the date format in Year-Month-Day-Hour-Minute-Second
         
         if self.gs_training_dir is None:
-        
             now = datetime.datetime.now()
             date_str = now.strftime("%Y-%m-%d-%H-%M-%S")
 
@@ -445,7 +447,6 @@ class VisionNode(object):
         Evaluate poses. Waits a few minutes for GS to reach 2k steps, then requests a pose from GS with FisherRF
         """
         self.done = False
-        
         cam_poses: List[PoseStamped] = []
         
         # compute transform from EE to camera
@@ -489,11 +490,11 @@ class VisionNode(object):
         """ Save the model  """
         # send request to NS to continue training
         self.gs_training = True
+        self.gs_data_dir
         
         # call training in data_dir
         self.gs_model.start_training(gs_data_dir)
         
-
 
 if __name__ == "__main__":
     node = VisionNode()

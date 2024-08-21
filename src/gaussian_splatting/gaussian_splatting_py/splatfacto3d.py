@@ -1,5 +1,7 @@
 # ARMLab 2024
 import subprocess
+
+import rospy
 from gaussian_splatting_py.base_splatfacto import ROSSplatfacto
 
 
@@ -23,14 +25,13 @@ class Splatfacto3D(ROSSplatfacto):
         
         command = f"""ns-train depth-splatfacto --data {data_dir} --output-dir {outputs_dir} --pipeline.model.render_uncertainty {self.render_uncertainty} --viewer.quit-on-train-completion True --pipeline.model.depth-loss-mult 0.1 nerfstudio-data --train-split-fraction 1"""
         # Open terminal and run GS training
-        print(command)
+        rospy.loginfo(command)
         
         subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', command])
-        print("Starting GS Training.")
+        rospy.loginfo("Starting GS Training.")
 
     
 if __name__ == "__main__":
-    # train on bunny blender example
     data_dir = '/home/user/NextBestSense/data/2024-07-28-02-02-26'
     splatfacto = Splatfacto3D(data_dir=data_dir)
     splatfacto.start_training(data_dir)

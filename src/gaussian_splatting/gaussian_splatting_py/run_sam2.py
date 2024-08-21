@@ -150,7 +150,6 @@ class SAM2(SAM2AutomaticMaskGenerator):
             # perform alignment on mask
             mde_mask = mde_depth[bool_mask]
             real_mask = real_depth[bool_mask]
-            
             scale, offset = learn_scale_and_offset_raw(mde_mask, real_mask)
             
             # update mde
@@ -172,6 +171,7 @@ class SAM2(SAM2AutomaticMaskGenerator):
         
         # update mde
         mde_depth[background_mask] = mde_depth[background_mask] * scale + offset
+        mde_depth[mde_depth < 0] = 0
         
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
         
@@ -203,7 +203,6 @@ if __name__ == '__main__':
     
     
     Sam2 = SAM2()
-    
     Sam2.generate(img_path=args.img_path, 
                   mde_depth_path=args.mde_depth_path, 
                   real_depth=args.real_depth)

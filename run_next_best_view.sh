@@ -1,10 +1,10 @@
 # TBD
 
-docker run --privileged -it --rm \
+docker run --privileged -it \
         --name boshu \
         --hostname dexterous_manipulation_desktop \
         --volume=/tmp/.X11-unix:/tmp/.X11-unix \
-        -v  /home/peasant98/Desktop/Boshu:/home/user/Documents\
+        -v  /home/arm/NBV_Boshu:/home/user/Documents\
         --device=/dev/dri:/dev/dri \
         --device=/dev/ttyUSB0:/dev/ttyUSB0 \
         --env="DISPLAY=$DISPLAY" \
@@ -13,5 +13,5 @@ docker run --privileged -it --rm \
         -e "TERM=xterm-256color" \
         --cap-add SYS_ADMIN --device /dev/fuse \
         --gpus all -it \
-        nbs:latest \
+        peasant98/dexterous_manipulation_desktop:latest \
         bash

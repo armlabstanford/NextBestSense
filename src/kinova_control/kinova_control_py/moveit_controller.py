@@ -31,12 +31,13 @@ from kinova_control_py.pose_util import RandomPoseGenerator, calcAngDiff
 from kinova_control_py.status import *
 from kinova_control_py.april_tag_detector import detect_img
 
-import kdl_parser_py.urdf as kdl_parser
-import PyKDL
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
 BOX_DIMS = (0.15, 0.15, 0.13)
+
+STARTING_VIEW_ID = 0
+ADDING_VIEW_ID = 1
 
 EXP_POSES = {
   "starting_joints": [],
@@ -47,12 +48,12 @@ EXP_POSES = {
 
 PICKLE_PATH_FULL = 'EXP_POSES.pkl'
 
-class ExampleMoveItTrajectories(object):
-  """ExampleMoveItTrajectories"""
+class TouchGSController(object):
+  """TouchGSController"""
   def __init__(self):
 
     # Initialize the node
-    super(ExampleMoveItTrajectories, self).__init__()
+    super(TouchGSController, self).__init__()
     moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node('touch-gs-controller')
     rospy.loginfo("Initializing Touch-GS controller")
@@ -65,13 +66,13 @@ class ExampleMoveItTrajectories(object):
     Description of below parameters:
     starting_views: number of views to start with. If should_collect_test_views in the launch file is True, we will collect this num of views and gracefully exit.
     
-    num_views: number of views to add after the starting views. If should_collect_test_views is false, we will add this num of views.
+    added_views: number of views to add after the starting views. If should_collect_test_views is false, we will add this num of views.
     
     should_collect_experiment: if True, we will collect the experiment data and save it to a pickle file, or read the data in. If not, we do not create any pickle file and just add random views.
     """
     
     self.starting_views = int(rospy.get_param("~starting_views", "5"))
-    self.num_views = int(rospy.get_param("~num_views", "10"))
+    self.added_views = int(rospy.get_param("~added_views", "10"))
     self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
     
     # if should_collect_experiment is True, then we will collect the experiment data or read it in from pickle file
@@ -137,10 +138,12 @@ class ExampleMoveItTrajectories(object):
     rospy.wait_for_service("/add_view")
     rospy.wait_for_service("/next_best_view")
     rospy.wait_for_service("/save_model")
+    rospy.wait_for_service("/get_gs_data_dir")
 
     self.add_view_client = rospy.ServiceProxy("/add_view", Trigger)
     self.nbv_client = rospy.ServiceProxy("/next_best_view", NBV)
     self.save_model_client = rospy.ServiceProxy("/save_model", SaveModel)
+    self.get_gs_data_dir_client = rospy.ServiceProxy("/get_gs_data_dir", Trigger)
 
     DT_DEPTH_TOPIC = "/RunCamera/imgDepth"
     img: Image = rospy.wait_for_message(DT_DEPTH_TOPIC, Image)
@@ -156,6 +159,8 @@ class ExampleMoveItTrajectories(object):
     self.finish_training_service = rospy.Service("finish_training", Trigger, self.finishTrainingCb)
     self.training_done = False
 
+    self.create_view_types_list()
+
   def depthImgCb(self, msg:Image):
     """ DT Depth Image Callback """
     # convert to numpy array
@@ -166,7 +171,13 @@ class ExampleMoveItTrajectories(object):
       rospy.logwarn("Depth Deformation is too high DIff {}".format(depth_deformation))
     
     self.dt_deform_thresh = depth_deformation > self.dt_deform_threshold_value
-    
+  
+  def get_gs_data_dir(self):
+    """ Get the GS Data Directory """
+    req = TriggerRequest()
+    res = self.get_gs_data_dir_client(req)
+    return res.message
+
   def finishTrainingCb(self, req) -> TriggerResponse:
       """ AddVision Cb 
       
@@ -595,155 +606,208 @@ class ExampleMoveItTrajectories(object):
         rospy.logwarn("Fail to Touch the Board")
         return status
 
-  def run(self):
-    """ Run Controller Method (Main Thread) """
-    success = self.is_init_success
+  def delete_test_result_param(self):
     try:
-        rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
+      rospy.delete_param("/kortex_examples_test_results/moveit_general_python")
     except:
-        pass
+      pass
+
+  def create_view_types_list(self):
+    """
+    Create a list of view types to add
+    """
+    self.view_type_ids = []
+
+    for _ in range(self.starting_views):
+      self.view_type_ids.append(0)
+    for _ in range(self.added_views):
+      self.view_type_ids.append(1)
+
+    self.total_views = self.starting_views + self.added_views
+
+  def generate_poses(self):
+    """ Generate Poses """
+
+    pose_req = NBVRequest()
+    candidate_joints = []
+
+    pose_cnt = 0
+    while pose_cnt < self.num_poses:
+      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
+      joints = self.pose_generator.calcIK(pose) 
+
+      # plan reaching the pose
+      success = False
+      while not success:
+        try:
+          success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+        except: 
+          success = False
+          rospy.logwarn("Fail to Plan Trajectory")
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
+          joints = self.pose_generator.calcIK(pose) 
+
+        # if plan succeeds, we can add the pose as valid
+        if success:
+          pose_cnt += 1
+
+          pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+          pose_req.poses.append(pose_msg)
+          candidate_joints.append(joints)
+
+    return candidate_joints, pose_req.poses
+  
+  def get_candidate_joints_and_poses(self, i, pose_req):
+    """ Get Candidate Joints and Poses """
+    pose_req = NBVRequest()
+    if self.exp_poses_available and self.should_collect_experiment:
+        candidate_joints, pose_req.poses = self.get_exp_poses_at(i, self.view_type_ids[i])
+    else:
+      candidate_joints, pose_req.poses = self.generate_poses()
+
+    return candidate_joints, pose_req
+  
+  def call_nbv(self, pose_req, candidate_joints):
+    """ Call Next Best View """
+    rospy.loginfo("Calling NBV...")
+    res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+    scores = np.array(res.scores)
+    sorted_indices = np.argsort(scores)[::-1]
+    return [candidate_joints[i] for i in sorted_indices]
+
+  def select_starting_view(self, candidate_joints, pose_req):
+    """ Select Starting View """
+    if self.exp_poses_available:
+      # follow previous trial init poses
+      joints = candidate_joints[0]
+      pose = pose_req.poses[0]
+    else:
+      # use random gen pose
+      rand_idx = np.random.randint(0, self.num_poses)
+      joints = candidate_joints[rand_idx]
+      pose = pose_req.poses[rand_idx]
+
+    return joints, pose
+  
+
+  def goto_pose(self, joints, sorted_by_score_joints=None):
+    joint_configuration_idx = 0
+    try:
+      success &= self.reach_joint_angles(joints)
+      if self.view_type_ids[i] == ADDING_VIEW_ID 
+        if success:
+          rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
+
+          # Keep trying to reach the joints, in order of highest score.
+          while not success and joint_configuration_idx < len(sorted_by_score_joints):
+            joint_configuration_idx += 1
+            joints = sorted_by_score_joints[joint_configuration_idx]
+            success = self.reach_joint_angles(joints) 
+        else:
+          rospy.loginfo("Went to Next Best View")
+    except:
+        rospy.logwarn("Fail to Execute Joint Trajectory")
+
+    return success
+
+  def add_to_experiment_if_needed(self, joints, pose, candidate_joints, i, pose_req):
+    if self.should_collect_experiment and not self.exp_poses_available:
+      if self.view_type_ids[i] == STARTING_VIEW_ID:
+        EXP_POSES["starting_joints"].append(joints)
+        EXP_POSES["starting_poses"].append(pose)
+      else:
+        EXP_POSES["candidate_joints"].append(candidate_joints)
+        EXP_POSES["candidate_poses"].append(pose_req.poses)
+        
+      rospy.loginfo("Writing EXP_POSES")
+      # write pickle file
+      with open(PICKLE_PATH_FULL, "wb") as f:
+        pickle.dump(EXP_POSES, f)
+
+  def call_add_view_client(self):
+    req = TriggerRequest()
+    rospy.loginfo("Adding View ...")
+    res = self.send_req_helper(self.add_view_client, req)
+    return res
+  
+  def update_gs_model(self, success):
+    rospy.loginfo("Saving Model with new pose ...")
+    req = SaveModelRequest()
+    req.success = success
+    res = self.send_req_helper(self.save_model_client, req)
+    if "Test" in res.message:
+      rospy.loginfo("Model is in test mode, exiting gracefully")
+      exit()
+
+  def vision_phase(self):
+    """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
+    i = 0
+    while i < self.total_views:
+      candidate_joints, pose_req = self.get_candidate_joints_and_poses(i, pose_req)
+
+      if self.view_type_ids[i] == STARTING_VIEW_ID:
+        joints, pose = self.select_starting_view(candidate_joints, pose_req)
+        
+      elif self.view_type_ids[i] == ADDING_VIEW_ID:
+        sorted_joints  = self.call_nbv(pose_req)
+        joints = sorted_joints[0]
+        
+      # reach the view
+      if joints is not None:
+        success = self.goto_pose(joints, sorted_joints)
+          
+        if not success:
+          rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
+          continue
+        else: 
+          self.add_to_experiment_if_needed(joints, pose, candidate_joints, i, pose_req)
+          i += 1
+          
+        self.call_add_view_client()
+
+        if i >= self.starting_views:
+          self.update_gs_model(success)
+
+  def touch_phase(self, gaussian_splatting_data_dir):
+    """ 
+    Touch Phase 
     
+    At this point, we have set all views. We now continue to the Touch phase.
+
+    1. Generate candidate poses from GS for touch (provided with segmented object in GS)
+    2. Send candidate poses to GS to compute the next best touch pose
+    3. Get the next best touch pose and move the robot to that pose for touch.
+    4. Get touch data and save it to the GS model. This includes directly injecting Gaussians into the scene and updating the views.
+    5. Train model n steps and repeat the process.
+    """
+    pass
+
+  def run(self):
+    """ Run Controller Method to get new views """
+    success = self.is_init_success
+    self.delete_test_result_param()
+    
+    # go home
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
     
     # Board Demo for the touch sensor
     # self.board_demo()
-      
-    start_views = self.starting_views
-    total_views_to_add = self.num_views
-    view_type_ids = []
-    for i in range(start_views):
-      view_type_ids.append(0)
-    for i in range(total_views_to_add):
-      view_type_ids.append(1)
-      
-    total_iters = len(view_type_ids)
-    i = 0
+
+    # Phase 1: Vision
+    self.vision_phase()
+
+    gaussian_splatting_data_dir = self.get_gs_data_dir()
     
-    while i < total_iters:
-      pose_req = NBVRequest()
-      candidate_joints = []
-      rospy.loginfo(view_type_ids[i])
-      
-      # Sample views near the sphere until we have 10 poses
-      if self.exp_poses_available and self.should_collect_experiment:
-        candidate_joints, pose_req.poses = self.get_exp_poses_at(i, view_type_ids[i])
-       
-      else:
-        pose_cnt = 0
-        while pose_cnt < self.num_poses:
-          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
-          joints = self.pose_generator.calcIK(pose) 
-
-          # make plans to reach the pose
-          success = False
-          while not success:
-            try:
-              success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
-            except: 
-              success = False
-              rospy.logwarn("Fail to Plan Trajectory")
-              pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
-              joints = self.pose_generator.calcIK(pose) 
-          
-          # if plan succeeds, we can add the pose as valid
-          if success:
-            pose_cnt += 1
-
-            pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
-            pose_req.poses.append(pose_msg)
-            candidate_joints.append(joints)
-      if view_type_ids[i] == 0:
-        # choose random joints
-        if self.exp_poses_available:
-          joints = candidate_joints[0]
-          pose = pose_req.poses[0]
-        else:
-          rand_idx = np.random.randint(0, self.num_poses)
-          joints = candidate_joints[rand_idx]
-          pose = pose_req.poses[rand_idx]
-        
-      elif view_type_ids[i] == 1:
-        # send the request for next best view
-        rospy.loginfo("Ready to call NBV")
-        res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
-        scores = np.array(res.scores)
-        sorted_indices = np.argsort(scores)[::-1]
-        sorted_joints = [candidate_joints[i] for i in sorted_indices]
-        
-        joints = sorted_joints[0]
-        joint_config_idx = 0
-        
-      # reach the view
-      if joints is not None:
-        try:
-          success &= self.reach_joint_angles(joints)
-          
-          if view_type_ids[i] == 1:
-            if not success:
-              rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
-              # skip other code and go to next view
-              while not success and joint_config_idx < len(sorted_joints):
-                joint_config_idx += 1
-                joints = sorted_joints[joint_config_idx]
-                success = self.reach_joint_angles(joints) 
-          
-          if view_type_ids[i] == 1:
-            rospy.loginfo("Went to Next Best View")
-            
-        except:
-          rospy.logwarn("Fail to Execute Joint Trajectory")
-          
-        if not success:
-          rospy.logwarn("Fail to Reach Joint Angles. Try Next View")
-          # skip other code and go to next view
-          continue
-        else: 
-          if self.should_collect_experiment and not self.exp_poses_available:
-            if view_type_ids[i] == 0:
-              EXP_POSES["starting_joints"].append(joints)
-              EXP_POSES["starting_poses"].append(pose)
-              
-            else:
-              # list of lists
-              EXP_POSES["candidate_joints"].append(candidate_joints)
-              EXP_POSES["candidate_poses"].append(pose_req.poses)
-              
-            # continually write EXP_POSES to file pickle
-            rospy.loginfo("Writing EXP_POSES")
-            # write pickle file
-            with open(PICKLE_PATH_FULL, "wb") as f:
-              pickle.dump(EXP_POSES, f)
-          
-          i += 1
-          
-        # Add the view
-        req = TriggerRequest()
-        res = self.send_req_helper(self.add_view_client, req)
-        
-        # train the model at the end of the first few views
-        if i >= start_views:
-          rospy.loginfo("Saving Model with new pose ...")
-          req = SaveModelRequest()
-          req.success = success
-          res = self.send_req_helper(self.save_model_client, req)
-          if "Test" in res.message:
-            rospy.loginfo("Model is in test mode, exiting gracefully")
-            exit()
-        else:
-          rospy.loginfo("Adding new train view...")
-        
-    # Save the model
-    rospy.loginfo("Save Model ...")
-    req = TriggerRequest()
-    self.send_req_helper(self.save_model_client, req)
+    # Phase 2: Touch
+    self.touch_phase(gaussian_splatting_data_dir)
 
     return success
 
 def main():
-  example = ExampleMoveItTrajectories()
-  example.run()
+  controller = TouchGSController()
+  controller.run()
 
 if __name__ == '__main__':
   main()
