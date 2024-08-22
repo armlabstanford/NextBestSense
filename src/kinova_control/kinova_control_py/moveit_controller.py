@@ -715,7 +715,6 @@ class TouchGSController(object):
 
     return joints, pose
   
-
   def goto_pose(self, i, joints, sorted_by_score_joints=None):
     joint_configuration_idx = 0
     success = True
@@ -723,7 +722,7 @@ class TouchGSController(object):
       success &= self.reach_joint_angles(joints)
       if self.view_type_ids[i] == ADDING_VIEW_ID:
         if success:
-          rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
+          rospy.logwarn("Success; reached next view! ")
 
           # Keep trying to reach the joints, in order of highest score.
           while not success and joint_configuration_idx < len(sorted_by_score_joints):
@@ -768,7 +767,6 @@ class TouchGSController(object):
 
   def vision_phase(self):
     """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
-    import pdb; pdb.set_trace()
 
     i = 0
     while i < self.total_views:
@@ -776,15 +774,15 @@ class TouchGSController(object):
 
       if self.view_type_ids[i] == STARTING_VIEW_ID:
         joints, pose = self.select_starting_view(candidate_joints, pose_req)
-        import pdb; pdb.set_trace()
 
       elif self.view_type_ids[i] == ADDING_VIEW_ID:
-        sorted_joints  = self.call_nbv(pose_req)
+        sorted_joints  = self.call_nbv(pose_req, candidate_joints)
         joints = sorted_joints[0]
         
       # reach the view
       if joints is not None:
-        success = self.goto_pose(i, joints, None)
+        sorted_by_score_joints = sorted_joints if self.view_type_ids[i] == ADDING_VIEW_ID else None
+        success = self.goto_pose(i, joints, sorted_by_score_joints)
           
         if not success:
           rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
@@ -793,11 +791,9 @@ class TouchGSController(object):
           self.add_to_experiment_if_needed(joints, pose, candidate_joints, i, pose_req)
           i += 1
         
-        import pdb; pdb.set_trace()
         self.call_add_view_client()
 
         if i >= self.starting_views:
-          import pdb; pdb.set_trace()
 
           self.update_gs_model(success)
 
