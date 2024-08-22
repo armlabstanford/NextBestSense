@@ -513,6 +513,9 @@ class TouchGSController(object):
       pass
 
       # TODO Call the Touch Service 
+
+      # get the touch sensor pose now
+      
       
 
       # return to the start pose
@@ -813,24 +816,36 @@ class TouchGSController(object):
     # pose generation phase
 
     # to get touches near the surface, we need esdf volume to sample poses near the surface
+
+    # phase 1. get board pose board 2 baseline
+    # TODO 
     touch_poses = self.get_board_touch_poses()
 
+    # sample uniformly on the board
+    # check the feasibility of the touch poses
     pose_req = NBVRequest()
     for pose in touch_poses:
-      pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
-      pose_req.poses.append(pose_msg)
+      
+      joints = self.pose_generator.calcIK(pose) 
+
+      # plan reaching the pose
+      success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+      if success:
+        pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+        pose_req.poses.append(pose_msg)
 
     # call the next best touch pose
-    # TODO 
-    sorted_joints = self.call_nbv(pose_req)
-    joints = sorted_joints[0]
-
+    res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+    scores = np.array(res.scores)
+    sorted_indices = np.argsort(scores)[::-1]
+    nbt_pose = touch_poses[sorted_indices[0]]
     # do the touch
-    self.touch_pose(joints)
+    self.touch_pose(nbt_pose)
 
     # save the touch data
 
 
+    # get the pose of the touch 
 
 
   def run(self):
