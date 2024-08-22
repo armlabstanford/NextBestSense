@@ -442,38 +442,44 @@ class VisionNode(object):
         inv_transform[:3, 3] = -inv_transform[:3, :3] @ transform[:3, 3]
         return inv_transform
 
-    def EvaluatePoses(self, poses:List[PoseStamped]) -> np.ndarray:
+    def EvaluatePoses(self, poses:List[PoseStamped], sensor='rgb') -> np.ndarray:
         """ 
         Evaluate poses. Waits a few minutes for GS to reach 2k steps, then requests a pose from GS with FisherRF
         """
         self.done = False
-        cam_poses: List[PoseStamped] = []
+        sensor_poses: List[PoseStamped] = []
+        link_name = "camera_link" if sensor == 'rgb' else "touch_link"
         
-        # compute transform from EE to camera
         try:
-            transform: TransformStamped = self.tfBuffer.lookup_transform("end_effector_link", "camera_link", rospy.Time())
+            transform: TransformStamped = self.tfBuffer.lookup_transform("end_effector_link", link_name, rospy.Time())
         except Exception as e:
             rospy.logerr(f"Failed to lookup transform from camera to end_effector_link: {e}")
             return None
         
         for pose in poses:
             try:
+                ee_pose = VisionNode.convertPose2Numpy(pose)
+                ee_to_sensor = VisionNode.convertTransform2Numpy(transform)
+                
+                # get the camera pose
+                sensor_pose = ee_to_sensor @ ee_pose
+                
                 # convert to pose stamped of the cam pose given the EE pose.
-                pose.pose.position.x += transform.transform.translation.x
-                pose.pose.position.y += transform.transform.translation.y
-                pose.pose.position.z += transform.transform.translation.z
+                # pose.pose.position.x += transform.transform.translation.x
+                # pose.pose.position.y += transform.transform.translation.y
+                # pose.pose.position.z += transform.transform.translation.z
 
-                # get transformation matrix from pose (4 x 4)
-                cam_pose = VisionNode.convertPose2Numpy(pose)
+                # # get transformation matrix from pose (4 x 4)
+                # sensor_pose = VisionNode.convertPose2Numpy(pose)
                 
                 # convert to pose
-                new_pose = VisionNode.convertNumpy2PoseStamped(cam_pose)
-                cam_poses.append(new_pose)
+                new_pose = VisionNode.convertNumpy2PoseStamped(sensor_pose)
+                sensor_poses.append(new_pose)
             except Exception as e:
                 rospy.logerr(f"Failed to transform pose: {e}")
                 return None
         
-        self.poses_for_nbv = cam_poses
+        self.poses_for_nbv = sensor_poses
         self.scores = []
         
         rate = rospy.Rate(1)  # 1 Hz
