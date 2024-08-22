@@ -107,7 +107,6 @@ class SAM2(SAM2AutomaticMaskGenerator):
         Returns:
             Aligned depth image.
         """
-        # import pdb; pdb.set_trace()
         image = np.asarray(Image.open(img_path))
 
         mde_depth = cv2.imread(mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
@@ -178,9 +177,7 @@ class SAM2(SAM2AutomaticMaskGenerator):
         print(f"Diff: {diff}")
         print("Masks generated.")
         
-        
         # save the final aligned mde depth and remove negative values
-        mde_depth[mde_depth < 0] = 0
         mde_depth = (mde_depth * 1000).astype(np.uint16)
         
         # get root path from img_path

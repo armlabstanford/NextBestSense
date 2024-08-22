@@ -691,7 +691,6 @@ class TouchGSController(object):
 
     return joints, pose
   
-
   def goto_pose(self, i, joints, sorted_by_score_joints=None):
     joint_configuration_idx = 0
     success = True
@@ -744,7 +743,6 @@ class TouchGSController(object):
 
   def vision_phase(self):
     """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
-    import pdb; pdb.set_trace()
 
     i = 0
     while i < self.total_views:
@@ -752,10 +750,9 @@ class TouchGSController(object):
 
       if self.view_type_ids[i] == STARTING_VIEW_ID:
         joints, pose = self.select_starting_view(candidate_joints, pose_req)
-        import pdb; pdb.set_trace()
 
       elif self.view_type_ids[i] == ADDING_VIEW_ID:
-        sorted_joints  = self.call_nbv(pose_req)
+        sorted_joints  = self.call_nbv(pose_req, candidate_joints)
         joints = sorted_joints[0]
         
       # reach the view
@@ -769,11 +766,9 @@ class TouchGSController(object):
           self.add_to_experiment_if_needed(joints, pose, candidate_joints, i, pose_req)
           i += 1
         
-        import pdb; pdb.set_trace()
         self.call_add_view_client()
 
         if i >= self.starting_views:
-          import pdb; pdb.set_trace()
 
           self.update_gs_model(success)
 
