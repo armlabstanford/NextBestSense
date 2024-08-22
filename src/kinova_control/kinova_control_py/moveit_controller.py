@@ -297,6 +297,11 @@ class TouchGSController(object):
     return res
 
   def convertNumpy2PoseStamped(self, pose:np.ndarray) -> PoseStamped:
+    """ Convert Numpy to PoseStamped 
+      If pose is 1D, it is a 7D pose, in the order of x y z qx qy qz qw
+      
+      If pose is 2D, it is a 4x4 pose
+    """
     pose_msg = PoseStamped()
     # relative to world
     pose_msg.header.frame_id = "base_link"
@@ -508,7 +513,7 @@ class TouchGSController(object):
       pass
 
       # TODO Call the Touch Service 
-
+      
 
       # return to the start pose
       # get current pose 
@@ -526,9 +531,18 @@ class TouchGSController(object):
       pass
 
     return status
-  
-  def board_demo(self):
-    """ Board Demo using Aruco Marker"""
+      
+  def get_board_touch_poses(self):
+    """ 
+    Get Board Touch Poses 
+    
+    Return:
+      poses: List of Poses to Touch
+        (x, y, z, qx, qy, qz, qw)
+    """
+    # go to home pose
+    self.reach_named_position("home")
+
     current_pose = self.get_cartesian_pose()
     q_cur = Quaternion(current_pose.orientation.w, current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z)
     delta_q = Quaternion(axis=[0, 1, 0], angle=np.pi / 2)
@@ -580,7 +594,7 @@ class TouchGSController(object):
 
     # get the pose of the aruco marker in the world frame
     w2b = c2b @ w2c
-    
+
     # sample pose on the board
     board_x = np.linspace(2, 8, 3) / 100
     board_y = np.linspace(2, 8, 3) / 100
@@ -596,13 +610,23 @@ class TouchGSController(object):
 
     # up right down towards the board
     # rot = np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]])
+    # vertice touch pose
     touch_q = q_start
+
+    poses = []
+    for coord in board_coord:
+      pose = np.array([coord[0], coord[1], coord[2], touch_q.x, touch_q.y, touch_q.z, touch_q.w])
+      poses.append(pose)
     
+    return poses
+
+  def board_demo(self):
+    """ Board Demo using Aruco Marker"""
+    poses = self.get_board_touch_poses()
+  
     # move to the board
-    for i in range(board_coord.shape[0]):
-      touch_pos = board_coord[i]
-      touch_pose = np.array([touch_pos[0], touch_pos[1], touch_pos[2], touch_q.x, touch_q.y, touch_q.z, touch_q.w])
-      
+    for touch_pose in poses:
+
       status = self.touch_pose(touch_pose)
       if status != SUCCESS and status != DT_THRESHOLD_EXCEED:
         rospy.logwarn("Fail to Touch the Board")
@@ -789,7 +813,29 @@ class TouchGSController(object):
     4. Get touch data and save it to the GS model. This includes directly injecting Gaussians into the scene and updating the views.
     5. Train model n steps and repeat the process.
     """
-    pass
+    
+    # pose generation phase
+
+    # to get touches near the surface, we need esdf volume to sample poses near the surface
+    touch_poses = self.get_board_touch_poses()
+
+    pose_req = NBVRequest()
+    for pose in touch_poses:
+      pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+      pose_req.poses.append(pose_msg)
+
+    # call the next best touch pose
+    # TODO 
+    sorted_joints = self.call_nbv(pose_req)
+    joints = sorted_joints[0]
+
+    # do the touch
+    self.touch_pose(joints)
+
+    # save the touch data
+
+
+
 
   def run(self):
     """ Run Controller Method to get new views """
