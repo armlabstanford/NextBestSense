@@ -698,7 +698,7 @@ class TouchGSController(object):
       success &= self.reach_joint_angles(joints)
       if self.view_type_ids[i] == ADDING_VIEW_ID:
         if success:
-          rospy.logwarn("Fail to Reach Joint Angles. Try Next Views")
+          rospy.logwarn("Success; reached next view! ")
 
           # Keep trying to reach the joints, in order of highest score.
           while not success and joint_configuration_idx < len(sorted_by_score_joints):
@@ -757,7 +757,8 @@ class TouchGSController(object):
         
       # reach the view
       if joints is not None:
-        success = self.goto_pose(i, joints, None)
+        sorted_by_score_joints = sorted_joints if self.view_type_ids[i] == ADDING_VIEW_ID else None
+        success = self.goto_pose(i, joints, sorted_by_score_joints)
           
         if not success:
           rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
