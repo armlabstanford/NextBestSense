@@ -27,6 +27,30 @@ from skimage.metrics import structural_similarity as compare_ssim
 
 import rospy
 
+def convertSpherical_np_cam(xyz):
+    """
+    convert x, y, z into r, phi, theta where theta is defined in xy plane
+    This ftn assumes that the y component has been flipped.
+    """
+    # ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
+    new_pts = np.zeros(xyz.shape)
+    xy = xyz[:,0]**2 + xyz[:,1]**2
+    new_pts[:,0] = np.sqrt(xy + xyz[:,2]**2)
+    new_pts[:,1] = np.arctan2(np.sqrt(xy), xyz[:,2]) # for elevation angle defined from Z-axis down
+    #new_pts[:,1] = np.arctan2(xyz[:,2], np.sqrt(xy)) # for elevation angle defined from XY-plane up
+
+    # to compensate cam effect 
+    new_pts[:,2] = np.arctan2(-xyz[:,1], xyz[:,0])
+    return new_pts
+
+def convertxyz_np(sphere):
+    # ptsnew = np.hstack((xyz, np.zeros(xyz.shape)))
+    new_pts = np.zeros(sphere.shape)
+    new_pts[:,0] = sphere[:,0]*np.sin(sphere[:,1])*np.cos(sphere[:,2])
+    new_pts[:,1] = sphere[:,0]*np.sin(sphere[:,1])*np.sin(sphere[:,2]) # for elevation angle defined from Z-axis down
+    new_pts[:,2] = sphere[:,0]*np.cos(sphere[:,1])
+    return new_pts
+
 class RunCamera:
     def __init__(self, port1, sensornum, netuse, camopen = True):
         super(RunCamera, self).__init__()
@@ -65,6 +89,7 @@ class RunCamera:
         self.device_num = 0
         self.imgidx = np.load(os.path.join(self.rootpath, 'Img2Depth/calib_idx/mask_idx_{}.npy'.format(sensornum)))
         self.radidx = np.load(os.path.join(self.rootpath, 'Img2Depth/calib_idx/pts_2ndmask_{}_80deg.npy'.format(sensornum)))
+        self.rayvector = np.load(os.path.join(self.rootpath, 'Img2Depth/calib_idx/pts_masked_{}.npy'.format(sensornum)))[:, 3:]
 
         # Read Base Image
         # self.baseimg = cv2.imread('../data/sen_{}_basic.jpg'.format(sensornum))
@@ -306,15 +331,63 @@ class RunCamera:
                     wrench_stamped_msg.wrench.force = Vector3(*forceEst[:3])
                     wrench_stamped_msg.wrench.torque = Vector3(*forceEst[3:])
                     self.force_pub.publish(wrench_stamped_msg)
+                
                 if self.ispos == 1:
                     # import pdb; pdb.set_trace()
                     depthImg = getDepth(self.model_pos, rectImg)
-                    msg_depth = self.br.cv2_to_imgmsg(depthImg, "8UC1")
+                    imgDepth_rgb = cv2.cvtColor(depthImg, cv2.COLOR_GRAY2RGB)
+                    
+                    # convert the depth image into mm
+                    depthImg = depthImg.astype(np.float32) / 256 * (self.maxrad - self.minrad) + self.minrad
+                    
+                    # here, we do the filtering based on mask
+                    # I create image_idx to keep track of the coordinate in the original image, idx = y * WIDTH + x
+                    image_idx = np.arange(0, 768*1024)
+                    img_noncrop = np.zeros((768, 1024))
+                    img_noncrop[self.cen_y-self.imgsize:self.cen_y+self.imgsize, self.cen_x-self.imgsize:self.cen_x+self.imgsize] = depthImg
+                    img_vec = img_noncrop.reshape(-1)
+                    img_vec = img_vec[self.imgidx][self.radidx]
+                    image_idx = image_idx[self.imgidx][self.radidx]
+
+                    # ray vec is the 3d point of the gel.
+                    ray_vec = self.rayvector[self.radidx,:]
+                    # to ensure the same coordinate, let's use the same atan ftn from convertsperical_np ftn
+                    # just for angle!
+                    ray_vec_spherical = convertSpherical_np_cam(ray_vec)
+                    ray_vec_spherical[:, 0] = img_vec       # TODO check this line for exp.
+                    ray_vec_spherical[:, 1] = ray_vec[:,2]
+
+                    # radius filtering
+                    radfiltering_upper, radfiltering_lower = 14.5, 12.2
+                    radius_filtering_index = np.where(
+                        (ray_vec_spherical[:,0]< radfiltering_upper) & 
+                        (ray_vec_spherical[:,0]> radfiltering_lower))
+                    ray_vec_spherical = ray_vec_spherical[radius_filtering_index]
+                    image_idx = image_idx[radius_filtering_index]
+
+                    zfiltering = 2.95
+                    ray_xyz = convertxyz_np(ray_vec_spherical)
+                    filtering_idx = np.where(ray_xyz[:, 2] > zfiltering)
+                    xyz_reduced = ray_xyz[filtering_idx]
+                    img_idx = image_idx[filtering_idx]
+
+                    # take the z map
+                    img_height = img_idx // 1024
+                    img_width = img_idx % 1024
+                    filtered_depthImg = np.zeros((768, 1024))
+                    filtered_depthImg[img_height, img_width] = xyz_reduced[:,2]
+                    
+                    # take the center crop
+                    filtered_depthImg = filtered_depthImg[self.cen_y-self.imgsize:self.cen_y+self.imgsize, self.cen_x-self.imgsize:self.cen_x+self.imgsize]
+                    # note the unit is in mm before x1000
+                    filtered_depthImg *= 1000
+                    filtered_depthImg = filtered_depthImg.astype(np.uint16)
+
+                    msg_depth = self.br.cv2_to_imgmsg(filtered_depthImg, "16UC1")
                     msg_depth.header.stamp = rospy.get_rostime()
                     msg_depth.header.frame_id = "touch"
                     self.img_pub_depth.publish(msg_depth)
 
-                    imgDepth_rgb = cv2.cvtColor(depthImg, cv2.COLOR_GRAY2RGB)
                     msg_depthshow = self.br.cv2_to_imgmsg(imgDepth_rgb, "rgb8")
                     msg_depthshow.header.stamp = rospy.get_rostime()
                     msg_depthshow.header.frame_id = "touch"
