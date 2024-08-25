@@ -72,7 +72,7 @@ class TouchGSController(object):
     """
     
     self.starting_views = int(rospy.get_param("~starting_views", "5"))
-    self.added_views = int(rospy.get_param("~added_views", "10"))
+    self.added_views = int(rospy.get_param("views_to_add", "10"))
     self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
     self.use_touch = bool(rospy.get_param("~use_touch", "False"))
     
