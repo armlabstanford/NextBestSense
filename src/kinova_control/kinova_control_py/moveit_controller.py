@@ -30,6 +30,7 @@ from kortex_driver.msg import TwistCommand
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
 import open3d as o3d
+import rosservice
 
 # tf buffer
 import tf2_ros
@@ -38,6 +39,12 @@ from kinova_control_py.pose_util import RandomPoseGenerator, calcAngDiff
 from kinova_control_py.status import *
 from kinova_control_py.april_tag_detector import detect_img
 
+try:
+  from voxblox import FastIntegrator
+  voxblox_installed = True
+except ImportError:
+  print("Voxblox not installed. Please install voxblox to use the touch phase")
+  voxblox_installed = False
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
@@ -173,12 +180,34 @@ class TouchGSController(object):
         "frames": []
       }
 
+    if voxblox_installed:
+      self.integrator = FastIntegrator()
+      self.pointcloud_sub = rospy.Subscriber("/camera/depth/points", PointCloud2, self.pointcloudCb)
+
     rospy.loginfo("Vision Node Services are available")
     
     self.finish_training_service = rospy.Service("finish_training", Trigger, self.finishTrainingCb)
     self.training_done = False
 
     self.create_view_types_list()
+
+  def pointcloudCb(self, msg:PointCloud2):
+    pass
+
+    # get transform from camera to base_link
+    try:
+      transform = self.tfBuffer.lookup_transform("base_link", msg.header.frame_id, rospy.Time())
+    except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+      rospy.logwarn("Fail to lookup transform from camera to base_link")
+      return EXECUTION_FAILURE
+  
+    c2w = np.eye(4)
+    c2w[:3, 3] = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
+    q = transform.transform.rotation
+    q = Quaternion(q.w, q.x, q.y, q.z)
+    c2w[:3, :3] = q.rotation_matrix
+
+    self.integrator.integratePointCloud(msg, c2w)
 
   def depthImgCb(self, msg:Image):
     """ DT Depth Image Callback """
@@ -644,6 +673,43 @@ class TouchGSController(object):
     
     return poses
   
+  def get_mesh(self, service_name:str = "/voxblox_node/generate_mesh", w2b = np.eye(4)):
+    # check gen_mesh service is available or not
+    service_list = rosservice.get_service_list()
+    
+    # get service from voxblox
+    if service_name in service_list:
+      mesh_filename = "/home/user/Documents/map.ply"
+      req = FilePathRequest()
+      req.file_path = mesh_filename
+      save_mesh_client = rospy.ServiceProxy(service_name, FilePath)
+      res = save_mesh_client(req)
+
+      mesh = o3d.io.read_triangle_mesh(mesh_filename)
+      coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.1, origin=[0., 0, 0])
+      coord.transform(w2b)
+      o3d.visualization.draw_geometries([mesh, coord])
+    
+    elif voxblox_installed:
+      pass
+
+    return mesh
+  
+  def get_tsdf_value(self, point):
+    """ Get TSDF Value """
+    if voxblox_installed:
+      return self.integrator.tsdf_at(point)
+    else:
+      # query the tsdf at the given point
+      req = QueryTSDFRequest()
+      req.point.x = point[0]
+      req.point.y = point[1]
+      req.point.z = point[2]
+    
+      tsdf_client = rospy.ServiceProxy("/voxblox_node/query_tsdf", QueryTSDF)
+      res = tsdf_client(req)
+      return res.tsdf
+  
   def get_tsdf_touch_poses(self):
     """ 
     Get TSDF Touch Poses 
@@ -673,16 +739,7 @@ class TouchGSController(object):
         rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
         continue
     
-    mesh_filename = "/home/user/Documents/map.ply"
-    req = FilePathRequest()
-    req.file_path = mesh_filename
-    save_mesh_client = rospy.ServiceProxy("/voxblox_node/generate_mesh", FilePath)
-    res = save_mesh_client(req)
-
-    mesh = o3d.io.read_triangle_mesh(mesh_filename)
-    coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.1, origin=[0., 0, 0])
-    coord.transform(w2b)
-    o3d.visualization.draw_geometries([mesh, coord])
+    mesh = self.get_mesh(w2b=w2b)
 
     # convert to board coordinate
     vertices_ = np.asarray(mesh.vertices)
@@ -730,21 +787,13 @@ class TouchGSController(object):
     # move along the normal direction
     center = center + select_normals * distance_along_normal
 
-    tsdf_client = rospy.ServiceProxy("/voxblox_node/query_tsdf", QueryTSDF)
-
     sample_coords = []
     for i in range(select_face_num):
         c_w = center[i]
+        tsdf = self.get_tsdf_value(c_w)
         
-        # query the tsdf at the given point
-        req = QueryTSDFRequest()
-        req.point.x = c_w[0]
-        req.point.y = c_w[1]
-        req.point.z = c_w[2]
-
-        res = tsdf_client(req)
         # filter by tsdf value
-        if res.tsdf <= 0.01 or res.tsdf > 0.1:
+        if tsdf <= 0.01 or tsdf > 0.1:
           continue
 
         x_axis = select_normals[i] * -1
@@ -769,7 +818,8 @@ class TouchGSController(object):
 
         sample_coords.append(transform)
 
-    original_mesh = o3d.io.read_triangle_mesh(mesh_filename)
+    # visualization 
+    original_mesh = self.get_mesh(w2b=w2b)
     coords = []
     for transform in sample_coords:
       sample_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.02, origin=[0., 0, 0])
