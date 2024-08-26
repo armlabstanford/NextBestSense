@@ -39,7 +39,9 @@ if __name__ == '__main__':
         normal = get_normals_from_img(image, normal_predictor)
         # Convert the normal map to a displayable format
         normal = (normal * 255).cpu().numpy().astype(np.uint8).transpose(1, 2, 0)
-        # normal = cv2.cvtColor(normal, cv2.COLOR_RGB2BGR)
+        plt.imshow(normal)
+        plt.show()
         
         # save normal image in same dir
         cv2.imwrite(img_dir + '/' + img.replace('.png', '_normal.png'), normal)
+        
