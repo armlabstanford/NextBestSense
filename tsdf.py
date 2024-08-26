@@ -34,9 +34,9 @@ if __name__ == "__main__":
         print(idx)
         frame =  frames[idx]
         color = cv2.imread(f'{ROOT}/{frame["file_path"]}')
-        color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
         depth = cv2.imread(f'{ROOT}/{frame["depth_file_path"]}', cv2.IMREAD_UNCHANGED)
         depth_meter = depth.astype(np.float32) / 1000.0
+        color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
 
         # create camera pose
         c2w = np.array(frame["transform_matrix"])
