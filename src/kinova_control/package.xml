@@ -56,7 +56,7 @@
   <build_export_depend>rospy</build_export_depend>
   <exec_depend>moveit_commander</exec_depend>
   <exec_depend>rospy</exec_depend>
-
+  <exec_depend>voxblox_ros</exec_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

@@ -25,3 +25,13 @@ Publish:
 4. `/RunCamera/imgDepth` Depth Image predicted by Neural Network
  
 5. `/RunCamera/imgDepth_show` RGB Depth Image (Psuedo-Color) 
+
+## Know Issues
+
+* Docker Container
+
+Please add `-v /dev/video0:/dev/video0 -v /dev/video1:/dev/video1` when using docker image.
+
+* Cannot Open Camera
+
+Try to restart the docker container or even reboot the computer.

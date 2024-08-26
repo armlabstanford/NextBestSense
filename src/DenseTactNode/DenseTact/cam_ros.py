@@ -360,8 +360,8 @@ class RunCamera:
                     # radius filtering
                     radfiltering_upper, radfiltering_lower = 14.5, 12.2
                     radius_filtering_index = np.where(
-                        (ray_vec_spherical[:,0]< radfiltering_upper) & 
-                        (ray_vec_spherical[:,0]> radfiltering_lower))
+                        (ray_vec_spherical[:,0] < radfiltering_upper) & 
+                        (ray_vec_spherical[:,0] > radfiltering_lower))
                     ray_vec_spherical = ray_vec_spherical[radius_filtering_index]
                     image_idx = image_idx[radius_filtering_index]
 

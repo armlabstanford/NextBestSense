@@ -4,5 +4,7 @@
     <!-- Include the second launch file -->
     <include file="$(find kinova_vision)/launch/kinova_vision.launch"/>
 
+    <include file="$(find voxblox_ros)/launch/realsense.launch"/>
+
     <!-- <include file="$(find DenseTactNode)/launch/dt.launch"/> -->
 </launch>

@@ -349,6 +349,7 @@ class VisionNode(object):
             Waits for GS to be trained, then proceeds
         """
         poses = req.poses
+        sensor = req.sensor
         res = NBVResponse()
 
         if len(poses) == 0:
@@ -356,7 +357,7 @@ class VisionNode(object):
             res.message = "No-Op -- No poses provided"
             return None
         
-        scores = self.EvaluatePoses(poses)
+        scores = self.EvaluatePoses(poses, sensor)
 
         # return response
         res.success = True

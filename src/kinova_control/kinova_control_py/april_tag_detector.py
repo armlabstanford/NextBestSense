@@ -28,7 +28,7 @@ def detect_img(img, cameraMatrix):
     (corners, ids, rejected) = cv2.aruco.detectMarkers(img, aruco_dict, parameters=arucoParams)
 
     if len(corners) < 5:
-        print("No markers found in image: ", path)
+        print("num markers found: ", len(corners))
         return False, None
 
     # img = cv2.aruco.drawDetectedMarkers(img, corners, ids)
