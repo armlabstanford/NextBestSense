@@ -217,7 +217,6 @@ if __name__ == "__main__":
 
     # Convert images to jpg and store them in 'jpg_images' directory
     jpg_dir = convert_images_to_jpg(args.data_dir)
-    
     # Run the application with the converted jpg images
     start_app(jpg_dir, predictor)
 
