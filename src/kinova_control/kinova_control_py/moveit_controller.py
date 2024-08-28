@@ -48,6 +48,8 @@ if 'tsdf_at' in dir(ScalableTSDFVolume):
 else:
   voxblox_installed = False
 
+voxblox_installed = False
+
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 OBJECT_CENTER = np.array([0.4, 0., 0.1])
 BOX_DIMS = (0.15, 0.15, 0.13)
@@ -868,11 +870,28 @@ class TouchGSController(object):
         
         y_axis = np.cross(z_axis, x_axis)
         R = np.array([x_axis, y_axis, z_axis]).T
-        transform = np.eye(4)
-        transform[:3, :3] = R
-        transform[:3, 3] = c_w
+        u, s, vh = np.linalg.svd(R, full_matrices=True)
+        s = np.ones((3, ))
+        R = u @ (s[..., None] * vh)
 
-        sample_coords.append(transform)
+        touch_poses = np.eye(4)
+        touch_poses[:3, :3] = R
+        touch_poses[:3, 3] = c_w
+
+        ee_poses = self.convert_pose("touch", "base_link", touch_poses)
+        joints = self.pose_generator.calcIK(ee_poses) 
+        if joints is None:
+          continue
+
+        try:
+          # plan reaching the pose
+          success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+        except:
+          success = False
+          rospy.logwarn("Fail to Plan Trajectory")
+
+        if success:
+          sample_coords.append(touch_poses)
 
     # visualization 
     original_mesh = self.get_mesh(w2b=w2b)
