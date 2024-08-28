@@ -17,15 +17,18 @@ sys.path.append('/miniconda/envs/densetact/lib/python3.8/site-packages')
 import rospy
 import moveit_commander
 import cv2
+import os
 from cv_bridge import CvBridge
 
 import moveit_msgs.msg
 import geometry_msgs.msg
+from geometry_msgs.msg import Point
 from voxblox_msgs.srv import FilePathRequest, FilePath
 from voxblox_msgs.srv import QueryTSDFRequest, QueryTSDF
 from geometry_msgs.msg import PoseStamped, Pose
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from kortex_driver.msg import TwistCommand
+import message_filters
 
 from std_srvs.srv import Trigger, TriggerResponse, TriggerRequest, Empty
 from gaussian_splatting.srv import NBV, NBVResponse, NBVRequest, SaveModel, SaveModelResponse, SaveModelRequest
@@ -39,11 +42,10 @@ from kinova_control_py.pose_util import RandomPoseGenerator, calcAngDiff
 from kinova_control_py.status import *
 from kinova_control_py.april_tag_detector import detect_img
 
-try:
-  from voxblox import FastIntegrator
+from open3d.pipelines.integration import ScalableTSDFVolume
+if 'tsdf_at' in dir(ScalableTSDFVolume):
   voxblox_installed = True
-except ImportError:
-  print("Voxblox not installed. Please install voxblox to use the touch phase")
+else:
   voxblox_installed = False
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
@@ -163,13 +165,13 @@ class TouchGSController(object):
 
     self.dt_deform_thresh = False # if True, means the DT sensor exceeds the threshold, and should be stopped
     if self.use_touch:
-      DT_DEPTH_TOPIC = "/RunCamera/imgDepth_show"
-      img: Image = rospy.wait_for_message(DT_DEPTH_TOPIC, Image)
+      self.DT_DEPTH_TOPIC = "/RunCamera/imgDepth_show"
+      img: Image = rospy.wait_for_message(self.DT_DEPTH_TOPIC, Image)
       self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
 
       self.dt_deform_threshold_value = rospy.get_param("~dt_deform_threshold_value", 95)
       rospy.loginfo("Depth Deformation Threshold Value: {}".format(self.dt_deform_threshold_value))
-      self.depthImg_sub = rospy.Subscriber(DT_DEPTH_TOPIC, Image, self.depthImgCb)
+      self.depthImg_sub = rospy.Subscriber(self.DT_DEPTH_TOPIC, Image, self.depthImgCb)
 
       self.touch_json_header = {
         "w": 640,
@@ -181,8 +183,18 @@ class TouchGSController(object):
       }
 
     if voxblox_installed:
-      self.integrator = FastIntegrator()
-      self.pointcloud_sub = rospy.Subscriber("/camera/depth/points", PointCloud2, self.pointcloudCb)
+      # create sync rgb and depth 
+      self.integrator = ScalableTSDFVolume(
+        voxel_length=0.004,
+        sdf_trunc=0.04,
+        color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
+      )
+      self.depth_sub = message_filters.Subscriber("/camera/depth/image_rect_raw", Image)
+      self.color_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
+      self.info_sub = message_filters.Subscriber("/camera/color/camera_info", CameraInfo)
+
+      self.tsdf_sync = message_filters.ApproximateTimeSynchronizer([self.depth_sub, self.color_sub, self.info_sub], 10, 0.1)
+      self.tsdf_sync.registerCallback(self.RGBDCallback)    
 
     rospy.loginfo("Vision Node Services are available")
     
@@ -190,6 +202,36 @@ class TouchGSController(object):
     self.training_done = False
 
     self.create_view_types_list()
+
+  def RGBDCallback(self, depth_msg:Image, color_msg:Image, info_msg:CameraInfo):
+    """ RGBD Callback """
+    # convert to numpy array
+    color_np = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="passthrough")
+    depth_np = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+    depth_np = depth_np.astype(np.float32) / 1000.0
+    depth_np = cv2.resize(depth_np, (info_msg.width, info_msg.height))
+
+    # get transform from camera to base_link
+    try:
+      transform = self.tfBuffer.lookup_transform("base_link", depth_msg.header.frame_id, rospy.Time())
+    except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+      rospy.logwarn("Fail to lookup transform from camera to base_link")
+      return EXECUTION_FAILURE
+
+    c2w = np.eye(4)
+    c2w[:3, 3] = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
+    q = transform.transform.rotation
+    q = Quaternion(q.w, q.x, q.y, q.z)
+    c2w[:3, :3] = q.rotation_matrix
+
+    extrinsincs = np.linalg.inv(c2w)
+
+    # get instrinsics
+    K = np.array(info_msg.K).reshape(3, 3)
+    intrinsic = o3d.camera.PinholeCameraIntrinsic(info_msg.width, info_msg.height, K[0, 0], K[1, 1], K[0, 2], K[1, 2])
+    rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(o3d.geometry.Image(color_np), o3d.geometry.Image(depth_np), depth_scale=1.0, depth_trunc=3.0, convert_rgb_to_intensity=False)
+
+    self.integrator.integrate(rgbd, intrinsic, extrinsincs)
 
   def pointcloudCb(self, msg:PointCloud2):
     pass
@@ -538,7 +580,11 @@ class TouchGSController(object):
     
     pose: The pose where the robot starts (x y z qx qy qz qw)
     distance: The distance to move the robot in the direction of the pose
-    """ 
+    """
+    # update undeformed depth image
+    img: Image = rospy.wait_for_message(self.DT_DEPTH_TOPIC, Image)
+    self.depth_undeformed = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+
     touch_q = Quaternion(pose[6], pose[3], pose[4], pose[5])
     touch_pos = np.array([pose[0], pose[1], pose[2]])
     rot = touch_q.rotation_matrix
@@ -648,8 +694,8 @@ class TouchGSController(object):
     q_start = Quaternion(current_pose.orientation.w, current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z)
 
     # sample pose on the board
-    board_x = np.linspace(2, 8, 3) / 100
-    board_y = np.linspace(2, 8, 3) / 100
+    board_x = np.linspace(0.5, 7.5, 4) / 100
+    board_y = np.linspace(0.5, 7.5, 4) / 100
 
     board_coord = np.meshgrid(board_x, board_y)
     board_coord = np.array(board_coord).reshape(2, -1).T
@@ -677,34 +723,42 @@ class TouchGSController(object):
     # check gen_mesh service is available or not
     service_list = rosservice.get_service_list()
     
-    # get service from voxblox
-    if service_name in service_list:
+    if voxblox_installed:
+      mesh = self.integrator.extract_triangle_mesh()
+    elif service_name in service_list:
       mesh_filename = "/home/user/Documents/map.ply"
       req = FilePathRequest()
       req.file_path = mesh_filename
       save_mesh_client = rospy.ServiceProxy(service_name, FilePath)
       res = save_mesh_client(req)
-
       mesh = o3d.io.read_triangle_mesh(mesh_filename)
-      coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.1, origin=[0., 0, 0])
-      coord.transform(w2b)
-      o3d.visualization.draw_geometries([mesh, coord])
+    else:
+      raise NotImplementedError("Service {} is not available".format(service_name))
     
-    elif voxblox_installed:
-      pass
+    # TODO remove comment for visualization
+
+    # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.1, origin=[0., 0, 0])
+    # coord.transform(w2b)
+    # o3d.visualization.draw_geometries([mesh, coord])
 
     return mesh
   
-  def get_tsdf_value(self, point):
+  def get_tsdf_value(self, points):
     """ Get TSDF Value """
     if voxblox_installed:
-      return self.integrator.tsdf_at(point)
+      # Open3D TSDF is actually distance * tsdf_trunc_inv
+      tsdfs = self.integrator.tsdf_at(points) * self.integrator.sdf_trunc
+      return tsdfs
+    
     else:
       # query the tsdf at the given point
       req = QueryTSDFRequest()
-      req.point.x = point[0]
-      req.point.y = point[1]
-      req.point.z = point[2]
+      for p in points:
+        p_ros = Point()
+        p_ros.x = p[0]
+        p_ros.y = p[1]
+        p_ros.z = p[2]
+        req.points.append(p_ros)
     
       tsdf_client = rospy.ServiceProxy("/voxblox_node/query_tsdf", QueryTSDF)
       res = tsdf_client(req)
@@ -756,7 +810,7 @@ class TouchGSController(object):
              (vertices[:, 2] > z_min) & (vertices[:, 2] < z_max)
       return mask
 
-    vertices_mask = box_filter(vertices_board, 0, 0.2, 0, 0.2, 0.01, 0.4)
+    vertices_mask = box_filter(vertices_board, 0, 0.2, 0, 0.2, 0., 0.4)
 
     faces_mask = vertices_mask[faces]
     faces_mask = faces_mask.reshape(-1, 3)
@@ -787,10 +841,12 @@ class TouchGSController(object):
     # move along the normal direction
     center = center + select_normals * distance_along_normal
 
+    tsdfs = self.get_tsdf_value(center)
+
     sample_coords = []
     for i in range(select_face_num):
         c_w = center[i]
-        tsdf = self.get_tsdf_value(c_w)
+        tsdf = tsdfs[i]
         
         # filter by tsdf value
         if tsdf <= 0.01 or tsdf > 0.1:
@@ -833,12 +889,14 @@ class TouchGSController(object):
   def board_demo(self):
     """ Board Demo using Aruco Marker"""
     poses = self.get_board_touch_poses()
+
+    gaussian_splatting_data_dir = "/home/user/Documents/gs_data"
   
     # move to the board
     for touch_pose in poses:
       
       # put a dummy function here
-      status = self.touch_pose(touch_pose, cb_func = lambda : SUCCESS)
+      status = self.touch_pose(touch_pose, cb_func=partial(self.save_touch_data, gaussian_splatting_data_dir))
       if status != SUCCESS and status != DT_THRESHOLD_EXCEED:
         rospy.logwarn("Fail to Touch the Board")
         return status
@@ -1053,7 +1111,10 @@ class TouchGSController(object):
 
   def save_touch_data(self, gaussian_save_dir):
     """ Callback Function to Save Touch Data """
-    depth_min, depth_max = 12.23, 16.88
+
+    # create the directory
+    os.makedirs(gaussian_save_dir, exist_ok=True)
+    os.makedirs(osp.join(gaussian_save_dir, "touch"), exist_ok=True)
     
     # get the current pose
     try:
@@ -1088,7 +1149,7 @@ class TouchGSController(object):
     })
 
     # save the json file
-    json_path = osp.join(gaussian_save_dir, "touch", "touch.json")
+    json_path = osp.join(gaussian_save_dir, "touch", "transforms.json")
     with open(json_path, "w") as f:
       js.dump(self.touch_json_header, f)
 
@@ -1170,6 +1231,7 @@ class TouchGSController(object):
 def main():
   controller = TouchGSController()
   controller.run()
+  # rospy.spin()
 
 if __name__ == '__main__':
   main()
