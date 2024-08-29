@@ -461,6 +461,7 @@ class VisionNode(object):
             try:
                 ee_pose = VisionNode.convertPose2Numpy(pose)
                 ee_to_sensor = VisionNode.convertTransform2Numpy(transform)
+                ee_to_sensor[:3, :3] = np.eye(3)
                 
                 # get the camera pose
                 sensor_pose = ee_to_sensor @ ee_pose

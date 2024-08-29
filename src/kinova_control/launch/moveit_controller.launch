@@ -14,7 +14,6 @@
 
     <arg name="save_data" default="True" />
     <arg name="should_collect_test_views" default="False" />
-
     <arg name="should_collect_experiment" default="False" />
     <arg name="starting_views" default="5"/>
     <arg name="added_views" default="15"/>

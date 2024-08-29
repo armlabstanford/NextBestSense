@@ -2,6 +2,8 @@
 
 # Author: Acorn Pooley, Mike Lautman, Boshu Lei, Matt Strong
 
+import os
+
 import sys
 from typing import List, Callable
 from functools import partial
@@ -19,6 +21,8 @@ import moveit_commander
 import cv2
 import os
 from cv_bridge import CvBridge
+
+import cv2
 
 import moveit_msgs.msg
 import geometry_msgs.msg
@@ -51,8 +55,13 @@ else:
 voxblox_installed = False
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
-OBJECT_CENTER = np.array([0.4, 0., 0.1])
-BOX_DIMS = (0.15, 0.15, 0.13)
+# OBJECT_CENTER = np.array([0.4, 0., 0.1]
+OBJECT_CENTER = np.array([0.5, 0., 0.0])
+# BOX_DIMS = (0.15, 0.15, 0.01)
+BOX_DIMS = (0.07, 0.07, 0.01)
+
+TOUCH_DATA_DIR = "/home/user/NextBestSense/data/touch_data/touch"
+
 
 STARTING_VIEW_ID = 0
 ADDING_VIEW_ID = 1
@@ -90,7 +99,7 @@ class TouchGSController(object):
     """
     
     self.starting_views = int(rospy.get_param("~starting_views", "5"))
-    self.added_views = int(rospy.get_param("~added_views", "10"))
+    self.added_views = int(rospy.get_param("views_to_add", "10"))
     self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
     self.use_touch = bool(rospy.get_param("~use_touch", "False"))
     
@@ -132,7 +141,7 @@ class TouchGSController(object):
       box_pose.header.frame_id = 'base_link'
       box_name = "box"
       # add box to the scene. In the future, resize to object size in GS
-      # self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
+      self.scene.add_box(box_name, box_pose, size=BOX_DIMS)
       rospy.loginfo("Added box to the scene")
 
       if self.is_gripper_present:
@@ -947,7 +956,7 @@ class TouchGSController(object):
 
     pose_cnt = 0
     while pose_cnt < self.num_poses:
-      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
+      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
       joints = self.pose_generator.calcIK(pose) 
 
       # plan reaching the pose
@@ -958,7 +967,7 @@ class TouchGSController(object):
         except: 
           success = False
           rospy.logwarn("Fail to Plan Trajectory")
-          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.6)
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
           joints = self.pose_generator.calcIK(pose) 
 
         # if plan succeeds, we can add the pose as valid
@@ -1064,7 +1073,6 @@ class TouchGSController(object):
 
   def vision_phase(self):
     """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
-
     i = 0
     while i < self.total_views:
       candidate_joints, pose_req = self.get_candidate_joints_and_poses(i)
@@ -1231,7 +1239,7 @@ class TouchGSController(object):
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
-    
+      
     # Board Demo for the touch sensor
     import pdb; pdb.set_trace()
     self.get_tsdf_touch_poses()
@@ -1240,10 +1248,10 @@ class TouchGSController(object):
     # Phase 1: Vision
     # self.vision_phase()
 
-    gaussian_splatting_data_dir = self.get_gs_data_dir()
+    # gaussian_splatting_data_dir = self.get_gs_data_dir()
     
     # Phase 2: Touch
-    self.touch_phase(gaussian_splatting_data_dir)
+    self.touch_phase('test')
 
     return success
 
