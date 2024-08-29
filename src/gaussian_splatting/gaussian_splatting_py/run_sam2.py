@@ -92,6 +92,7 @@ def compute_homography(K, R, t):
 class SAM2(SAM2AutomaticMaskGenerator):
     def __init__(self, points_per_side=64, pred_iou_thresh=0.95, use_m2m=False):
         sam2 = build_sam2(MODEL_CFG, SAM2_PATH, device ='cuda', apply_postprocessing=False)
+        # build sam2 with points and iou threshold
         super().__init__(sam2, points_per_side=points_per_side, pred_iou_thresh=pred_iou_thresh, use_m2m=use_m2m)
         print("SAM2 initialized.")
 

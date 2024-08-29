@@ -27,6 +27,8 @@ import cv2
 import moveit_msgs.msg
 import geometry_msgs.msg
 from geometry_msgs.msg import Point
+
+
 from voxblox_msgs.srv import FilePathRequest, FilePath
 from voxblox_msgs.srv import QueryTSDFRequest, QueryTSDF
 from geometry_msgs.msg import PoseStamped, Pose
@@ -82,6 +84,7 @@ class TouchGSController(object):
     # Initialize the node
     super(TouchGSController, self).__init__()
     moveit_commander.roscpp_initialize(sys.argv)
+
     rospy.init_node('touch-gs-controller')
     rospy.loginfo("Initializing Touch-GS controller")
     self.bridge = CvBridge()
@@ -1073,6 +1076,7 @@ class TouchGSController(object):
 
   def vision_phase(self):
     """ Vision Phase. Starting with a few random views, perform FisherRF to get the next best view """
+    import pdb; pdb.set_trace()
     i = 0
     while i < self.total_views:
       candidate_joints, pose_req = self.get_candidate_joints_and_poses(i)
@@ -1096,11 +1100,10 @@ class TouchGSController(object):
           self.add_to_experiment_if_needed(joints, pose, candidate_joints, i, pose_req)
           i += 1
         
-        # self.call_add_view_client()
+        self.call_add_view_client()
 
-        # if i >= self.starting_views:
-
-        #   self.update_gs_model(success)
+        if i >= self.starting_views:
+          self.update_gs_model(success)
 
   def convert_pose(self, source_frame, target_frame, pose):
     """ Convert Touch Poses to EE Poses """
@@ -1234,24 +1237,23 @@ class TouchGSController(object):
     """ Run Controller Method to get new views """
     success = self.is_init_success
     self.delete_test_result_param()
-    
+
     # go home
     if success:
       rospy.loginfo("Reaching Named Target Home...")
       success &= self.reach_named_position("home")
       
     # Board Demo for the touch sensor
-    import pdb; pdb.set_trace()
-    self.get_tsdf_touch_poses()
+    # self.get_tsdf_touch_poses()
     # self.board_demo()
 
     # Phase 1: Vision
-    # self.vision_phase()
+    self.vision_phase()
 
     # gaussian_splatting_data_dir = self.get_gs_data_dir()
     
     # Phase 2: Touch
-    self.touch_phase('test')
+    # self.touch_phase('test')
 
     return success
 
