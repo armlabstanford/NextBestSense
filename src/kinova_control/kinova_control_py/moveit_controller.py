@@ -9,20 +9,21 @@ from typing import List, Callable
 from functools import partial
 import pickle
 import numpy as np
+import torch
+import torch.nn.functional as F
+from skimage.morphology import binary_dilation, disk
 import json as js
 from pyquaternion import Quaternion
 from scipy.spatial.transform import Rotation as sciR
 from matplotlib import pyplot as plt
-from os import path as osp
 sys.path.append('/miniconda/envs/densetact/lib/python3.8/site-packages')
 
 import rospy
 import moveit_commander
 import cv2
 import os
+from os import path as osp
 from cv_bridge import CvBridge
-
-import cv2
 
 import moveit_msgs.msg
 import geometry_msgs.msg
@@ -50,11 +51,11 @@ from kinova_control_py.april_tag_detector import detect_img
 
 from open3d.pipelines.integration import ScalableTSDFVolume
 if 'tsdf_at' in dir(ScalableTSDFVolume):
-  voxblox_installed = True
+  Open3D_installed = True
 else:
-  voxblox_installed = False
+  Open3D_installed = False
 
-voxblox_installed = False
+Open3D_installed = False
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
 # OBJECT_CENTER = np.array([0.4, 0., 0.1]
@@ -76,6 +77,63 @@ EXP_POSES = {
 }
 
 PICKLE_PATH_FULL = 'EXP_POSES.pkl'
+
+def mask_filter(vertices, gaussian_data_dir):
+  """ Mask Filter using the SAM2 Data 
+  
+  Args:
+    vertices: (N, 3) Vertices of the Mesh in the world frame
+    gaussian_data_dir: The directory where the gaussian data is saved
+  """
+
+  vertices_cu = torch.from_numpy(vertices).float().cuda()
+  vertices_cu = torch.cat([vertices_cu, torch.ones((vertices_cu.shape[0], 1)).cuda()], dim=1) # (N, 4)
+  vertices_cu = vertices_cu.T # (4, N)
+
+  # read json file
+  with open(osp.join(gaussian_data_dir, 'transforms.json')) as f:
+      data = js.load(f)
+  
+  intrinsic = np.eye(3)
+  intrinsic[0, 0] = data["fl_x"]
+  intrinsic[1, 1] = data["fl_y"]
+  intrinsic[0, 2] = data["cx"]
+  intrinsic[1, 2] = data["cy"]
+  intrinsic_cu = torch.from_numpy(intrinsic).float().cuda()
+
+  W, H = data["w"], data["h"]
+
+  frames = data["frames"]
+  sampled_masks = []
+  for frame in frames:
+    mask_path = frame["mask_path"]
+    mask_img = cv2.imread(osp.join(gaussian_data_dir, mask_path), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255. 
+    mask_img = torch.from_numpy(binary_dilation(mask_img, disk(24))).float()[None, None].cuda()
+
+    c2w = np.array(frame["transform_matrix"])
+    w2c = np.linalg.inv(c2w)
+    w2c = w2c[:3, :]
+    w2c_cu = torch.from_numpy(w2c).float().cuda()
+
+    # get vertices in the camera frame
+    vertices_c = intrinsic_cu @ w2c_cu @ vertices_cu # (4, N)
+    pix_coords = vertices_c[:2, :] / (vertices_c[2, :].unsqueeze(0) + 1e-6)
+    pix_coords = pix_coords.permute(1, 0) # (N, 2)
+    pix_coords[..., 0] = pix_coords[..., 0] / W
+    pix_coords[..., 1] = pix_coords[..., 1] / H
+    pix_coords = pix_coords * 2 - 1
+    valid = ((pix_coords > -1) & (pix_coords < 1)).all(dim=1).float()
+
+    sampled_mask = \
+          F.grid_sample(mask_img, pix_coords[None, None], mode='nearest', align_corners=True, padding_mode="zeros")
+    sampled_mask = sampled_mask.squeeze()
+    sampled_mask = sampled_mask + (1 - valid)
+    sampled_masks.append(sampled_mask)
+  
+  sampled_mask = torch.stack(sampled_masks, dim=-1)
+  mask = (sampled_mask > 0.).all(dim=-1).cpu().numpy()
+
+  return mask
 
 class TouchGSController(object):
   """TouchGSController"""
@@ -198,7 +256,7 @@ class TouchGSController(object):
         "frames": []
       }
 
-    if voxblox_installed:
+    if Open3D_installed:
       # create sync rgb and depth 
       self.integrator = ScalableTSDFVolume(
         voxel_length=0.004,
@@ -739,7 +797,7 @@ class TouchGSController(object):
     # check gen_mesh service is available or not
     service_list = rosservice.get_service_list()
     
-    if voxblox_installed:
+    if Open3D_installed:
       mesh = self.integrator.extract_triangle_mesh()
     elif service_name in service_list:
       mesh_filename = "/home/user/Documents/map.ply"
@@ -761,7 +819,7 @@ class TouchGSController(object):
   
   def get_tsdf_value(self, points):
     """ Get TSDF Value """
-    if voxblox_installed:
+    if Open3D_installed:
       # Open3D TSDF is actually distance * tsdf_trunc_inv
       tsdfs = self.integrator.tsdf_at(points) * self.integrator.sdf_trunc
       return tsdfs
@@ -780,6 +838,23 @@ class TouchGSController(object):
       res = tsdf_client(req)
       return res.tsdf
   
+  def box_filter(self, vertices, x_min, x_max, y_min, y_max, z_min, z_max):
+    """ Box Filter, make sure the marker board is in the region """
+    # get the board region here .. if you want to use box filter
+    w2b = self.get_aruco_marker_coord()
+
+    vertices_board = w2b[:3, :3].T @ (vertices.T - w2b[:3, [3]])
+    vertices_board = vertices_board.T # (N, 3)
+    # mesh.vertices = o3d.utility.Vector3dVector(vertices)
+
+    def box_filtering(vertices, x_min, x_max, y_min, y_max, z_min, z_max):
+      mask = (vertices[:, 0] > x_min) & (vertices[:, 0] < x_max) & \
+             (vertices[:, 1] > y_min) & (vertices[:, 1] < y_max) & \
+             (vertices[:, 2] > z_min) & (vertices[:, 2] < z_max)
+      return mask
+
+    return box_filtering(vertices_board, x_min, x_max, y_min, y_max, z_min, z_max)
+  
   def get_tsdf_touch_poses(self):
     """ 
     Get TSDF Touch Poses 
@@ -788,15 +863,12 @@ class TouchGSController(object):
       poses: List of Poses to Touch
         (x, y, z, qx, qy, qz, qw)
     """
-    
-    # get the board region here ..
-    w2b = self.get_aruco_marker_coord()
+    # board_center = np.array([0.1, 0.1, 0.06, 1.0])
+    # obs_center = w2b @ board_center
+    # OBJECT_CENTER = obs_center[:3]
 
-    board_center = np.array([0.1, 0.1, 0.06, 1.0])
-    obs_center = w2b @ board_center
-    OBJECT_CENTER = obs_center[:3]
-
-    i = 0
+    # get some poses for TSDF integration,
+    # comment this with vision phase.
     for i in range(5):
       # always random sa
       candidate_joints, pose_req = self.get_candidate_joints_and_poses(0)
@@ -809,24 +881,15 @@ class TouchGSController(object):
         rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
         continue
     
-    mesh = self.get_mesh(w2b=w2b)
+    mesh = self.get_mesh()
 
-    # convert to board coordinate
+    # filter vertices in Region of Interest
     vertices_ = np.asarray(mesh.vertices)
-    vertices_board = w2b[:3, :3].T @ (vertices_.T - w2b[:3, [3]])
-    vertices_board = vertices_board.T # (N, 3)
-    # mesh.vertices = o3d.utility.Vector3dVector(vertices)
-
+    vertices_mask = mask_filter(vertices_, self.get_gs_data_dir())
+    # vertices_mask = self.box_filter(vertices_, 0, 0.2, 0, 0.2, 0., 0.4)
+    
     mesh_faces = np.asarray(mesh.triangles)
     faces = mesh_faces.reshape(-1)
-
-    def box_filter(vertices, x_min, x_max, y_min, y_max, z_min, z_max):
-      mask = (vertices[:, 0] > x_min) & (vertices[:, 0] < x_max) & \
-             (vertices[:, 1] > y_min) & (vertices[:, 1] < y_max) & \
-             (vertices[:, 2] > z_min) & (vertices[:, 2] < z_max)
-      return mask
-
-    vertices_mask = box_filter(vertices_board, 0, 0.2, 0, 0.2, 0., 0.4)
 
     faces_mask = vertices_mask[faces]
     faces_mask = faces_mask.reshape(-1, 3)
@@ -908,7 +971,7 @@ class TouchGSController(object):
           sample_coords.append(touch_poses)
 
     # visualization 
-    original_mesh = self.get_mesh(w2b=w2b)
+    original_mesh = self.get_mesh()
     coords = []
     for transform in sample_coords:
       sample_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.02, origin=[0., 0, 0])
