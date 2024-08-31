@@ -1,2 +1,6 @@
 view_selection_method: "fisher"
 views_to_add: 10
+
+touches_to_add: 10
+
+is_challenge_object: true

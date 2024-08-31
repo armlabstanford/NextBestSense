@@ -103,6 +103,8 @@ class TouchGSController(object):
     
     self.starting_views = int(rospy.get_param("~starting_views", "5"))
     self.added_views = int(rospy.get_param("views_to_add", "10"))
+    self.num_touches_to_add = int(rospy.get_param("touches_to_add", "10"))
+        
     self.should_collect_experiment = bool(rospy.get_param("~should_collect_experiment", "False"))
     self.use_touch = bool(rospy.get_param("~use_touch", "False"))
     
@@ -1249,6 +1251,8 @@ class TouchGSController(object):
 
     # Phase 1: Vision
     self.vision_phase()
+    
+    # self.num_touches_to_add is the amount of touches to add
 
     # gaussian_splatting_data_dir = self.get_gs_data_dir()
     

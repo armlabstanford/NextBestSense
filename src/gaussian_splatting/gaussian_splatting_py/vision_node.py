@@ -48,6 +48,8 @@ class VisionNode(object):
         self.save_data_dir = rospy.get_param("~save_data_dir", "/home/user/NextBestSense/data")
         self.gs_data_dir = rospy.get_param("~gs_data_dir", "/home/user/Documents./touch-gs-data/bunny_blender_data")
         
+        self.is_challenge_object = bool(rospy.get_param("is_challenge_object", "False"))
+        
         # GS model
         self.gs_training = False
         self.gs_model = splatfacto(data_dir=self.gs_data_dir)
@@ -91,10 +93,17 @@ class VisionNode(object):
         self.images: List[np.ndarray] = []
         # store depth images in (H, W) [0 - max val of uint16]
         self.depths: List[np.ndarray] = []
+        # store monocular depth images in (H, W) [0 - max val of uint16]
+        self.monocular_depths: List[np.ndarray] = []
+        # store realsense depth images in (H, W) [0 - max val of uint16]
+        self.realsense_depths: List[np.ndarray] = []
         # store original camera to world pose 
         self.poses: List[np.ndarray] = []
         # store poses for next best view to send to GS
         self.poses_for_nbv: List[np.ndarray] = []
+        self.depth_aligned_complete = []
+        for _ in range(100):
+            self.depth_aligned_complete.append(False)
         
         self.scores: List[float] = []
 
@@ -188,15 +197,31 @@ class VisionNode(object):
         scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
         depth_np = (scale * predicted_depth) + offset
         
+        first_stage_depth = depth_np
+        
+        transform = np.array([
+            [1.00000000e+00, 0.00000000e+00, 0.00000000e+00, -0.01],
+            [0.00000000e+00, 1.00000000e+00, 0.00000000e+00, 0.09],
+            [0.00000000e+00, 0.00000000e+00, 1.00000000e+00, -2.22044605e-16],
+            [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 1.00000000e+00]
+        ])
+        
+        K = np.array([
+            [360.01333,    0.      , 243.87228],
+            [  0.      , 360.0133667, 137.9218444],
+            [  0.      ,   0.      ,   1.      ]
+        ])
+        rs_depth = warp_image(depth, K, transform[:3, :3], transform[:3, 3])
+        
         # perform SAM2 semantic alignment if use_sam is True
         if use_sam:
-            # call SAM2 process in python3.11. Save the image, depth, and predicted depth
+            # Save the image, depth, and predicted depth
             img_path = osp.join(self.save_data_dir, "sam2_img.png")
             depth_path = osp.join(self.save_data_dir, "sam2_depth.png")
             mde_depth_path = osp.join(self.save_data_dir, "sam2_mde_depth.png")
             
             cv2.imwrite(img_path, rgb)
-            depth = (depth * 1000).astype(np.uint16)
+            depth = (rs_depth * 1000).astype(np.uint16)
             predicted_depth = (predicted_depth * 1000).astype(np.uint16)
             cv2.imwrite(depth_path, depth)
             cv2.imwrite(mde_depth_path, predicted_depth)
@@ -211,7 +236,7 @@ class VisionNode(object):
         depth_np[depth_np < 0] = 0
         
         rospy.loginfo(f"Scale: {scale}, Offset: {offset}")
-        return depth_np
+        return depth_np, rs_depth, first_stage_depth
 
     def addVisionCb(self, req) -> TriggerResponse:
         """ AddVision Cb 
@@ -254,7 +279,6 @@ class VisionNode(object):
         cam2cam_transform = VisionNode.convertTransform2Numpy(cam2cam_transform)
         K = np.array(self.depth_cam_info.K).reshape(3, 3)
         
-        
         realsense_depth = warp_image(depth, K, cam2cam_transform[:3, :3], cam2cam_transform[:3, 3])
         img_np = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
         
@@ -263,7 +287,7 @@ class VisionNode(object):
         predicted_depth = output['depth']
         
         # align depths 
-        depth_np = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
+        depth_np, rs_depth, first_stage_depth = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
         
         # save fig of the depth image
         full_mde_path = osp.join(self.save_data_dir, f"mde_depth_img{self.idx}.png")
@@ -276,10 +300,9 @@ class VisionNode(object):
         plt.imsave(full_mde_path, depth_np, cmap='viridis')
         
         plt.figure()
-        plt.imshow(realsense_depth, cmap='viridis')
+        plt.imshow(rs_depth, cmap='viridis')
         plt.colorbar(label='Realsense Depth')
-        plt.imsave(full_rs_path, realsense_depth, cmap='viridis')
-        cv2.imwrite(full_rs_path, (realsense_depth * 1000).astype(np.uint16))
+        plt.imsave(full_rs_path, rs_depth, cmap='viridis')
         
         try:
             transform: TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_link", rospy.Time())
@@ -293,6 +316,8 @@ class VisionNode(object):
             self.poses.append(c2w)
             self.images.append(img_np)
             self.depths.append(depth_np)
+            self.realsense_depths.append(rs_depth)
+            self.monocular_depths.append(first_stage_depth)
             
             res.message = "Success"
             rospy.loginfo(f"Added view to the dataset with {len(self.images)} images")
@@ -404,15 +429,21 @@ class VisionNode(object):
             "frames": [],
         }
 
-        for img_idx, (pose, image, depth) in enumerate(zip(self.poses, self.images, self.depths)):
+        for img_idx, (pose, image, depth, rs_depth, monocular_depth) in enumerate(zip(self.poses, self.images, self.depths, self.realsense_depths, self.monocular_depths)):
             # save the image
             image_path = osp.join(self.gs_training_dir, "images", "{:04d}.png".format(img_idx))
             depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_depth.png".format(img_idx))
+            realsense_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_realsense_depth.png".format(img_idx))
+            mde_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_mde_depth.png".format(img_idx))
             
             depth = (depth * 1000).astype(np.uint16)
+            realsense_depth = (rs_depth * 1000).astype(np.uint16)
+            monocular_depth = (monocular_depth * 1000).astype(np.uint16)
 
             cv2.imwrite(image_path, image)
             cv2.imwrite(depth_path, depth)
+            cv2.imwrite(realsense_depth_path, realsense_depth)
+            cv2.imwrite(mde_depth_path, monocular_depth)
 
             # save the pose
             pose_list = pose.tolist()
@@ -431,8 +462,32 @@ class VisionNode(object):
             
         rospy.loginfo(f"Saved all images to {self.gs_training_dir}. Now generating masks in SAM2...")
         
-        # construct sam2 masks
+        # construct sam2 masks. 
         os.system(f"python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/frames_sam2.py --data_dir {self.gs_training_dir}")
+        
+        # redo alignment with SAM2
+        for img_idx in range(len(self.images)):
+            img_path = osp.join(self.gs_training_dir, "images", "{:04d}.png".format(img_idx))
+            realsense_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_realsense_depth.png".format(img_idx))
+            aligned_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_depth.png".format(img_idx))
+            mde_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_mde_depth.png".format(img_idx))
+            
+            # run sam2 again
+            if not self.depth_aligned_complete[img_idx]:
+                is_challenge_object_str = "--is_challenge_object" if self.is_challenge_object else ""
+                rel_mask_path = osp.join("masks", "{:04d}.png".format(img_idx))
+                full_mask_path = osp.join(self.gs_training_dir, rel_mask_path)
+                os.system(f"""python3.11 /home/user/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/run_sam2.py \
+                            --img_path {img_path} \
+                            --real_depth {realsense_depth_path} \
+                            --mde_depth_path {aligned_depth_path} \
+                            {is_challenge_object_str} \
+                            --object_mask_path {full_mask_path} \
+                            --original_mde_depth_path {mde_depth_path}""".replace('\n', ''))
+                
+                self.depth_aligned_complete[img_idx] = True
+                depth_np = cv2.imread(osp.join(self.save_data_dir, "mde_depth_aligned.png"), cv2.IMREAD_UNCHANGED).astype(np.uint16)
+                cv2.imwrite(depth_path, depth_np)
         
         return self.gs_training_dir
     
@@ -465,14 +520,6 @@ class VisionNode(object):
                 
                 # get the camera pose
                 sensor_pose = ee_to_sensor @ ee_pose
-                
-                # convert to pose stamped of the cam pose given the EE pose.
-                # pose.pose.position.x += transform.transform.translation.x
-                # pose.pose.position.y += transform.transform.translation.y
-                # pose.pose.position.z += transform.transform.translation.z
-
-                # # get transformation matrix from pose (4 x 4)
-                # sensor_pose = VisionNode.convertPose2Numpy(pose)
                 
                 # convert to pose
                 new_pose = VisionNode.convertNumpy2PoseStamped(sensor_pose)

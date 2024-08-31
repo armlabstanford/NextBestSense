@@ -96,7 +96,9 @@ class SAM2(SAM2AutomaticMaskGenerator):
         super().__init__(sam2, points_per_side=points_per_side, pred_iou_thresh=pred_iou_thresh, use_m2m=use_m2m)
         print("SAM2 initialized.")
 
-    def generate(self, img_path: str, mde_depth_path: str, real_depth: str):
+    def generate(self, img_path: str, mde_depth_path: str, real_depth: str,
+                 is_challenge_object: bool = False, object_mask_path=None,
+                 original_mde_depth_path: str = None) -> Union[None, list]:
         """
         Generate the masks for the image.
 
@@ -104,6 +106,7 @@ class SAM2(SAM2AutomaticMaskGenerator):
             image: The input image.
             mde_depth: The depth image from monocular depth estimation.
             real_depth: The real depth image.
+            mask_object: If not None, the object to mask and include in the background table segmentation
 
         Returns:
             Aligned depth image.
@@ -113,31 +116,15 @@ class SAM2(SAM2AutomaticMaskGenerator):
         mde_depth = cv2.imread(mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
         real_depth = cv2.imread(real_depth, cv2.IMREAD_UNCHANGED) / 1000.0
         
-        
-        # warp real depth
-        transform = np.array([
-            [1.00000000e+00, 0.00000000e+00, 0.00000000e+00, -0.01],
-            [0.00000000e+00, 1.00000000e+00, 0.00000000e+00, 0.09],
-            [0.00000000e+00, 0.00000000e+00, 1.00000000e+00, -2.22044605e-16],
-            [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 1.00000000e+00]
-        ])
-        
-        K = np.array([
-            [360.01333,    0.      , 243.87228],
-            [  0.      , 360.0133667, 137.9218444],
-            [  0.      ,   0.      ,   1.      ]
-        ])
-        real_depth = warp_image(real_depth, K, transform[:3, :3], transform[:3, 3])
-        
-        # get difference between the two depths filtered 0s
+        # get difference between the two depths' filtered 0s
         sparse_mask = real_depth > 0
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
         print(f"Diff: {diff}")
         
         results = super().generate(image)
-        
         all_masks = []
         background_mask = np.ones_like(image)
+        
         # remove last dim
         background_mask = background_mask[:, :, 0]
         for result in results:
@@ -158,17 +145,29 @@ class SAM2(SAM2AutomaticMaskGenerator):
             mde_depth[mde_depth < 0] = 0
             background_mask = background_mask * (1 - mask)
         
-        # TODO -- see if this is messing up the predictions
         background_mask = background_mask.astype(bool)
+        
         mde_mask = mde_depth[background_mask]
         real_mask = real_depth[background_mask]
         
         scale, offset = learn_scale_and_offset_raw(mde_mask, real_mask)
+        # mde_depth = mde_depth * scale + offset
         
-        # update mde
         mde_depth[background_mask] = mde_depth[background_mask] * scale + offset
         mde_depth[mde_depth < 0] = 0
         
+        if is_challenge_object:
+            # read in old mde depth
+            old_mde_depth = cv2.imread(original_mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
+            old_mde_mask = old_mde_depth[background_mask]
+            
+            scale, offset = learn_scale_and_offset_raw(old_mde_mask, real_mask)
+            mask = cv2.imread(object_mask_path, cv2.IMREAD_UNCHANGED)
+            mask = mask.astype(bool)
+            mde_depth[mask] = old_mde_depth[mask] * scale + offset
+            mde_depth[mde_depth < 0] = 0
+            
+
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
         
         img_diff = np.abs(mde_depth - real_depth)
@@ -195,11 +194,16 @@ if __name__ == '__main__':
     parser.add_argument('--img_path', type=str, required=True, help="Path to the image file")
     parser.add_argument('--mde_depth_path', type=str, required=True, help="Path to the MDE depth file")
     parser.add_argument('--real_depth', type=str, required=True, help="Path to the real depth file")
+    parser.add_argument("--is_challenge_object", action="store_true", help="If the object is a challenge object")
+    parser.add_argument("--object_mask_path", type=str, help="Path to the object mask")
+    parser.add_argument("--original_mde_depth_path", type=str, help="Path to the original MDE depth file")
     
     args = parser.parse_args()
-    
     
     Sam2 = SAM2()
     Sam2.generate(img_path=args.img_path, 
                   mde_depth_path=args.mde_depth_path, 
-                  real_depth=args.real_depth)
+                  real_depth=args.real_depth,
+                  is_challenge_object=args.is_challenge_object,
+                  object_mask_path=args.object_mask_path,
+                  original_mde_depth_path=args.original_mde_depth_path)

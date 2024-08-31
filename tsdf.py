@@ -3,8 +3,8 @@ import cv2
 import json as js
 import numpy as np
 
-JSON_PATH = 'data/2024-08-22-00-56-23/transforms.json'
-ROOT = 'data/2024-08-22-00-56-23/'
+JSON_PATH = 'data/prism/transforms.json'
+ROOT = 'data/prism/'
 if __name__ == "__main__":
     # read json file
     with open(JSON_PATH) as f:
