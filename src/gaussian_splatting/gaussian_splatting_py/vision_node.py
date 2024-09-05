@@ -194,10 +194,14 @@ class VisionNode(object):
     
     def align_depth(self, depth: np.ndarray, predicted_depth: np.ndarray, 
                     rgb: np.ndarray, use_sam: bool = False) -> np.ndarray:
-        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
-        depth_np = (scale * predicted_depth) + offset
+        # scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
+        # depth_np = (scale * predicted_depth) + offset
+        scale = 1
+        offset = 0
+        depth_np = predicted_depth
+        depth_np[depth_np < 0] = 0
         
-        first_stage_depth = depth_np
+        first_stage_depth = predicted_depth
         
         transform = np.array([
             [1.00000000e+00, 0.00000000e+00, 0.00000000e+00, -0.01],
@@ -252,11 +256,20 @@ class VisionNode(object):
         
         res = TriggerResponse()
         res.success = True
-        rospy.sleep(5)
+        rospy.sleep(3)
 
         # grab the image message
         img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
         img_np = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+        
+        try:
+            transform: TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_link", rospy.Time())
+            img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
+            img_np = self.bridge.imgmsg_to_cv2(img, desired_encoding="passthrough")
+        except Exception as e:
+            rospy.logerr(f"Failed to lookup transform from camera to base_link: {e}")
+            res.success = False
+            res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
 
         # grab the depth image message
         depth_img: Image = rospy.wait_for_message(self.DEPTH_CAMERA_TOPIC, Image)
@@ -304,12 +317,7 @@ class VisionNode(object):
         plt.colorbar(label='Realsense Depth')
         plt.imsave(full_rs_path, rs_depth, cmap='viridis')
         
-        try:
-            transform: TransformStamped = self.tfBuffer.lookup_transform("base_link", "camera_link", rospy.Time())
-        except Exception as e:
-            rospy.logerr(f"Failed to lookup transform from camera to base_link: {e}")
-            res.success = False
-            res.message = "Error Code 3: Failed to lookup transform from camera to base_link"
+
             
         if res.success:
             c2w = VisionNode.convertTransform2Numpy(transform)
@@ -450,6 +458,7 @@ class VisionNode(object):
             pose_info = {
                 "file_path": osp.join("images", "{:04d}.png".format(img_idx)),
                 "depth_file_path": osp.join("images", "{:04d}_depth.png".format(img_idx)),
+                "mde_depth_file_path": osp.join("images", "{:04d}_mde_depth.png".format(img_idx)),
                 "mask_path": osp.join("masks", "{:04d}.png".format(img_idx)),
                 "transform_matrix": pose_list,
             }
@@ -472,8 +481,8 @@ class VisionNode(object):
             aligned_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_depth.png".format(img_idx))
             mde_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_mde_depth.png".format(img_idx))
             
-            # run sam2 again
-            if not self.depth_aligned_complete[img_idx]:
+            # run sam2 again if is challenge object
+            if not self.depth_aligned_complete[img_idx] and self.is_challenge_object:
                 is_challenge_object_str = "--is_challenge_object" if self.is_challenge_object else ""
                 rel_mask_path = osp.join("masks", "{:04d}.png".format(img_idx))
                 full_mask_path = osp.join(self.gs_training_dir, rel_mask_path)

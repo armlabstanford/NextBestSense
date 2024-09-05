@@ -3,9 +3,6 @@
     <arg name="namespace" default="dt"/>
     <arg name="ckpt" default="$(find DenseTactNode)/position_sensor_102.pth"/>
 
-    <!-- Include the touch sensor transform-->
-    <node pkg="tf2_ros" type="static_transform_publisher" name="knova_dtv2" args="0.0 0.0 0.0607 0 0 -0.7071068 0.7071068 end_effector_link touch" />
-
     <!-- Launch the example in that namespace -->
     <node name="cam_ros" pkg="DenseTactNode" type="cam_ros.py" output="screen" ns="$(arg namespace)">
         <param name="camname1" value="/dev/video0" />
