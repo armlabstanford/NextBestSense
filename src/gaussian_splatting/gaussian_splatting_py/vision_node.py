@@ -194,14 +194,11 @@ class VisionNode(object):
     
     def align_depth(self, depth: np.ndarray, predicted_depth: np.ndarray, 
                     rgb: np.ndarray, use_sam: bool = False) -> np.ndarray:
-        # scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
-        # depth_np = (scale * predicted_depth) + offset
-        scale = 1
-        offset = 0
-        depth_np = predicted_depth
+        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
+        depth_np = (scale * predicted_depth) + offset
         depth_np[depth_np < 0] = 0
         
-        first_stage_depth = predicted_depth
+        first_stage_depth = depth_np
         
         transform = np.array([
             [1.00000000e+00, 0.00000000e+00, 0.00000000e+00, -0.01],
@@ -256,7 +253,7 @@ class VisionNode(object):
         
         res = TriggerResponse()
         res.success = True
-        rospy.sleep(3)
+        rospy.sleep(8)
 
         # grab the image message
         img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
@@ -299,26 +296,25 @@ class VisionNode(object):
         output = self.monocular_depth(img_np)
         predicted_depth = output['depth']
         
-        # align depths 
-        depth_np, rs_depth, first_stage_depth = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
-        
-        # save fig of the depth image
         full_mde_path = osp.join(self.save_data_dir, f"mde_depth_img{self.idx}.png")
         full_rs_path = osp.join(self.save_data_dir, f"rs_depth_img{self.idx}.png")
         self.idx += 1
         
         plt.figure()
-        plt.imshow(depth_np, cmap='viridis')
+        plt.imshow(predicted_depth, cmap='viridis')
         plt.colorbar(label='MDE Depth')
-        plt.imsave(full_mde_path, depth_np, cmap='viridis')
+        plt.imsave(full_mde_path, predicted_depth, cmap='viridis')
         
+        # align depths 
+        depth_np, rs_depth, first_stage_depth = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
+        
+        # save fig of the depth image
         plt.figure()
         plt.imshow(rs_depth, cmap='viridis')
         plt.colorbar(label='Realsense Depth')
         plt.imsave(full_rs_path, rs_depth, cmap='viridis')
         
 
-            
         if res.success:
             c2w = VisionNode.convertTransform2Numpy(transform)
             self.poses.append(c2w)
@@ -482,7 +478,7 @@ class VisionNode(object):
             mde_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_mde_depth.png".format(img_idx))
             
             # run sam2 again if is challenge object
-            if not self.depth_aligned_complete[img_idx] and self.is_challenge_object:
+            if not self.depth_aligned_complete[img_idx]:
                 is_challenge_object_str = "--is_challenge_object" if self.is_challenge_object else ""
                 rel_mask_path = osp.join("masks", "{:04d}.png".format(img_idx))
                 full_mask_path = osp.join(self.gs_training_dir, rel_mask_path)

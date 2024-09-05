@@ -8,6 +8,7 @@ import sys
 from typing import List, Callable
 from functools import partial
 import pickle
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -54,14 +55,16 @@ if 'tsdf_at' in dir(ScalableTSDFVolume):
   Open3D_installed = True
 else:
   Open3D_installed = False
-
-Open3D_installed = False
+  
+from pynput import keyboard
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
-# OBJECT_CENTER = np.array([0.4, 0., 0.1]
-OBJECT_CENTER = np.array([0.5, 0., 0.0])
-# BOX_DIMS = (0.15, 0.15, 0.01)
-BOX_DIMS = (0.07, 0.07, 0.01)
+# OBJECT_CENTER = np.array([0.4, 0., 0.1])
+# OBJECT_CENTER = np.array([0.4, 0.05, 0.1])
+OBJECT_CENTER = np.array([0.55, 0.00, 0.3])
+
+BOX_DIMS = (0.15, 0.15, 0.15)
+# BOX_DIMS = (0.07, 0.07, 0.01)
 
 TOUCH_DATA_DIR = "/home/user/NextBestSense/data/touch_data/touch"
 
@@ -105,7 +108,7 @@ def mask_filter(vertices, gaussian_data_dir):
 
   frames = data["frames"]
   sampled_masks = []
-  for frame in frames:
+  for frame in tqdm(frames, desc="Mask Filter"):
     mask_path = frame["mask_path"]
     mask_img = cv2.imread(osp.join(gaussian_data_dir, mask_path), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255. 
     mask_img = torch.from_numpy(binary_dilation(mask_img, disk(24))).float()[None, None].cuda()
@@ -141,6 +144,7 @@ class TouchGSController(object):
 
     # Initialize the node
     super(TouchGSController, self).__init__()
+    self.end_touch = False
     moveit_commander.roscpp_initialize(sys.argv)
 
     rospy.init_node('touch-gs-controller')
@@ -246,6 +250,12 @@ class TouchGSController(object):
       self.dt_deform_threshold_value = rospy.get_param("~dt_deform_threshold_value", 95)
       rospy.loginfo("Depth Deformation Threshold Value: {}".format(self.dt_deform_threshold_value))
       self.depthImg_sub = rospy.Subscriber(self.DT_DEPTH_TOPIC, Image, self.depthImgCb)
+      
+      self.DT_RAW_IMG_TOPIC = "/RunCamera/image_raw_1"
+      raw_img: Image = rospy.wait_for_message(self.DT_RAW_IMG_TOPIC, Image)
+      self.raw_img = self.bridge.imgmsg_to_cv2(raw_img, desired_encoding="passthrough")
+      
+      # self.raw_img_sub = rospy.Subscriber(self.DT_RAW_IMG_TOPIC, Image, self.rawImgCb)
 
       self.touch_json_header = {
         "w": 640,
@@ -263,12 +273,12 @@ class TouchGSController(object):
         sdf_trunc=0.04,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
       )
-      self.depth_sub = message_filters.Subscriber("/camera/depth/image_rect_raw", Image)
-      self.color_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
-      self.info_sub = message_filters.Subscriber("/camera/color/camera_info", CameraInfo)
+      # self.depth_sub = message_filters.Subscriber("/camera/depth/image_rect_raw", Image)
+      # self.color_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
+      # self.info_sub = message_filters.Subscriber("/camera/color/camera_info", CameraInfo)
 
-      self.tsdf_sync = message_filters.ApproximateTimeSynchronizer([self.depth_sub, self.color_sub, self.info_sub], 10, 0.1)
-      self.tsdf_sync.registerCallback(self.RGBDCallback)    
+      # self.tsdf_sync = message_filters.ApproximateTimeSynchronizer([self.depth_sub, self.color_sub, self.info_sub], 10, 0.1)
+      # self.tsdf_sync.registerCallback(self.RGBDCallback)    
 
     rospy.loginfo("Vision Node Services are available")
     
@@ -335,9 +345,15 @@ class TouchGSController(object):
       rospy.logwarn("Depth Deformation is too high DIff {}".format(depth_deformation))
     
     self.dt_deform_thresh = depth_deformation > self.dt_deform_threshold_value
+    
+  def rawImgCb(self, msg:Image):
+    """ DT Raw Image Callback """
+    self.raw_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
   
   def get_gs_data_dir(self):
     """ Get the GS Data Directory """
+    return "/home/user/NextBestSense/data/object_2"
+    
     req = TriggerRequest()
     res = self.get_gs_data_dir_client(req)
     return res.message
@@ -513,8 +529,8 @@ class TouchGSController(object):
     
     return True
   
-  def vel_approach(self, target_pose, start_pose, exec_time=10,
-                   trans_tolerate=0.002, ang_tolerate=0.01, dt_safety_check=True):
+  def vel_approach(self, target_pose, start_pose, exec_time=30,
+                   trans_tolerate=0.002, ang_tolerate=0.01, dt_safety_check=True, use_moveit=True):
     """ 
     Use velocity control to approach the target pose 
     
@@ -528,20 +544,22 @@ class TouchGSController(object):
     dt_safety_check: If True, when the depth sensor exceeds the threshold, stop the robot
                   disable it when you are sure the sensor is moving away from the object 
     """ 
+    import pdb; pdb.set_trace()
       
     rospy.loginfo("Starting Velocity Control")
     rospy.loginfo("Move to Start Pose")
     
-    joints = self.pose_generator.calcIK(start_pose) 
-    success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
-    if not success:
-      rospy.logwarn("Fail to Plan Trajectory")
-      return PLAN_FAILURE
-    
-    success = self.reach_joint_angles(joints) 
-    if not success:
-      rospy.logwarn("Fail to Reach Joint Angles")
-      return EXECUTION_FAILURE
+    if use_moveit:
+      joints = self.pose_generator.calcIK(start_pose) 
+      success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+      if not success:
+        rospy.logwarn("Fail to Plan Trajectory")
+        return PLAN_FAILURE
+      
+      success = self.reach_joint_angles(joints) 
+      if not success:
+        rospy.logwarn("Fail to Reach Joint Angles")
+        return EXECUTION_FAILURE
     
     # start velocity control
     vel_pub = rospy.Publisher("/my_gen3/in/cartesian_velocity", TwistCommand, queue_size=10)
@@ -561,8 +579,9 @@ class TouchGSController(object):
         status = TIME_EXCEEDED
         break
 
-      if dt_safety_check and self.dt_deform_thresh:
-        rospy.logwarn("Depth Deformation Exceeded")
+      if self.end_touch or (dt_safety_check and self.dt_deform_thresh):
+        rospy.logwarn("Touch ended or Depth Deformation Exceeded")
+        self.end_touch = False
         status = DT_THRESHOLD_EXCEED
         break
       
@@ -588,9 +607,12 @@ class TouchGSController(object):
       xdes = t / exec_time * (target_pose[:3] - start_pose[:3]) + start_pose[:3]
       vdes = (target_pose[:3] - start_pose[:3]) / exec_time
        
-      # P controller
-      v = 5 * (xdes - xcur) + vdes
-      # rospy.loginfo("Current v: {}".format(v))
+      # P controller for velocity
+      if use_moveit:
+        v = 0.1 * (xdes - xcur) + vdes
+      else:
+        v = 0.5 * (xdes - xcur) + vdes
+        
       
       # compute the desired orientation
       qdes = (t / exec_time) * q_target + (1 - t / exec_time) * q_start
@@ -623,9 +645,12 @@ class TouchGSController(object):
       command.twist.angular_y = ang_vel[1]
       command.twist.angular_z = ang_vel[2]
       
+      # publish command
       vel_pub.publish(command)
       rate.sleep()   
       
+  
+    command = TwistCommand()
     # stop the robot
     command.twist.linear_x = 0.
     command.twist.linear_y = 0.
@@ -634,6 +659,7 @@ class TouchGSController(object):
     command.twist.angular_y = 0.
     command.twist.angular_z = 0.
     vel_pub.publish(command) 
+    
     
     # compute the final pose error
     current_pose = self.get_cartesian_pose()
@@ -648,7 +674,7 @@ class TouchGSController(object):
 
     return status
 
-  def touch_pose(self, pose, distance = 0.1, cb_func:Callable = None):
+  def touch_pose(self, pose, distance = 0.15, cb_func:Callable = None):
     """ 
     Get One touch at the pose
     
@@ -670,8 +696,8 @@ class TouchGSController(object):
     start_pose = np.array([start_pos[0], start_pos[1], start_pos[2], 
                            pose[3], pose[4], pose[5], pose[6]])
 
-    status = self.vel_approach(pose, start_pose, exec_time=6)
-
+    status = self.vel_approach(pose, start_pose, exec_time=30)
+    import pdb; pdb.set_trace()
     if status == SUCCESS or status == DT_THRESHOLD_EXCEED:
       # TODO Call the Touch Service 
       # get the touch sensor pose now
@@ -682,7 +708,7 @@ class TouchGSController(object):
       current_pose = self.get_cartesian_pose()
       current_pose = np.array([current_pose.position.x, current_pose.position.y, current_pose.position.z, 
                                current_pose.orientation.x, current_pose.orientation.y, current_pose.orientation.z, current_pose.orientation.w])
-      self.vel_approach(start_pose, current_pose, exec_time=3, dt_safety_check=False)
+      self.vel_approach(start_pose, current_pose, exec_time=10, dt_safety_check=False, use_moveit=False)
     
     elif status == PLAN_FAILURE or status == EXECUTION_FAILURE:
       rospy.logwarn("Fail to Reach Target Pose")
@@ -793,6 +819,49 @@ class TouchGSController(object):
     
     return poses
   
+  def build_from_data_folder(self, gs_data_dir:str):
+    # read json file
+    with open(osp.join(gs_data_dir, 'transforms.json')) as f:
+      data = js.load(f)
+
+
+    frames = data["frames"]
+    cam_w = data["w"]
+    cam_h = data["h"]
+    focal_x = data["fl_x"]
+    focal_y = data["fl_y"]
+    cx = data["cx"]
+    cy = data["cy"]
+
+    # create camera intrinsics
+    intrinsic = o3d.camera.PinholeCameraIntrinsic()
+    intrinsic.set_intrinsics(cam_w, cam_h, focal_x, focal_y, cx, cy)
+
+    for idx in tqdm(range(len(frames)), desc="Integrating TSDF"):
+
+        frame =  frames[idx]
+        color = cv2.imread(osp.join(gs_data_dir, frame["file_path"]))
+        # rgb to bgr
+        color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+        depth = cv2.imread(osp.join(gs_data_dir, frame["depth_file_path"]), cv2.IMREAD_UNCHANGED)
+
+        depth_meter = depth.astype(np.float32) / 1000.0
+
+        # create camera pose
+        c2w = np.array(frame["transform_matrix"])
+        extrinsic = np.linalg.inv(c2w)
+
+        # create rgbd image
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            o3d.geometry.Image(color),
+            o3d.geometry.Image(depth_meter),
+            depth_scale=1.0,
+            depth_trunc=10.0,
+            convert_rgb_to_intensity=False)
+        
+        # integrate rgbd image into TSDF volume
+        self.integrator.integrate(rgbd, intrinsic, extrinsic)
+  
   def get_mesh(self, service_name:str = "/voxblox_node/generate_mesh", w2b = np.eye(4)):
     # check gen_mesh service is available or not
     service_list = rosservice.get_service_list()
@@ -810,11 +879,10 @@ class TouchGSController(object):
       raise NotImplementedError("Service {} is not available".format(service_name))
     
     # TODO remove comment for visualization
-
+    # rospy.loginfo("Visualizing Mesh")
     # coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.1, origin=[0., 0, 0])
     # coord.transform(w2b)
     # o3d.visualization.draw_geometries([mesh, coord])
-
     return mesh
   
   def get_tsdf_value(self, points):
@@ -869,18 +937,17 @@ class TouchGSController(object):
 
     # get some poses for TSDF integration,
     # comment this with vision phase.
-    for i in range(5):
-      # always random sa
-      candidate_joints, pose_req = self.get_candidate_joints_and_poses(0)
-      joints, pose = self.select_starting_view(candidate_joints, pose_req)
+    # for i in range(5):
+    #   # always random sa
+    #   candidate_joints, pose_req = self.get_candidate_joints_and_poses(0)
+    #   joints, pose = self.select_starting_view(candidate_joints, pose_req)
  
-      # reach the view
-      success = self.goto_pose(i, joints, None)
+    #   # reach the view
+    #   success = self.goto_pose(i, joints, None)
         
-      if not success:
-        rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
-        continue
-    
+    #   if not success:
+    #     rospy.logwarn("Fail to Reach Joint Angles. Iterating again...")
+    #     continue
     mesh = self.get_mesh()
 
     # filter vertices in Region of Interest
@@ -900,13 +967,15 @@ class TouchGSController(object):
     
     # Filter the mesh
     mesh.triangles = o3d.utility.Vector3iVector(filter_faces)
+    o3d.visualization.draw_geometries([mesh])
 
     # compute normal
     mesh.compute_triangle_normals()
     normals = np.asarray(mesh.triangle_normals)
 
     # random select 100 faces
-    select_face_num = 100
+    # increase the number of faces to get more samples, when there is no touches
+    select_face_num = 400
     distance_along_normal = 0.03
 
     face_idx = np.arange(normals.shape[0])
@@ -919,33 +988,39 @@ class TouchGSController(object):
 
     # move along the normal direction
     center = center + select_normals * distance_along_normal
-
+    normal_opposite = select_normals * -1
+    center_opposite = center + normal_opposite * distance_along_normal
+    
+    # sample two sides on the surface
+    center = np.vstack([center, center_opposite])
+    select_normals = np.vstack([select_normals, normal_opposite])
+    
     tsdfs = self.get_tsdf_value(center)
-
     sample_coords = []
     for i in range(select_face_num):
         c_w = center[i]
         tsdf = tsdfs[i]
         
         # filter by tsdf value
-        if tsdf <= 0.01 or tsdf > 0.1:
+        if tsdf <= 0.01 or tsdf > 0.05:
           continue
 
-        x_axis = select_normals[i] * -1
+        z_axis = select_normals[i] * -1
 
         # take poses only pointing downward
-        if x_axis[2] > 0:
+        if z_axis[2] > 0:
             continue
 
-        dummy = np.cross(np.array([0, 0, 1]), x_axis)
-        dummy2 = np.cross(np.array([0, 1, 0]), x_axis)
+        dummy = np.cross(np.array([0, 0, -1]), z_axis)
+        dummy2 = np.cross(np.array([-1, 0, 0]), z_axis)
         
         axis = dummy if np.linalg.norm(dummy) > np.linalg.norm(dummy2) else dummy2
-        z_axis = np.cross(x_axis, axis)
-        if z_axis[2] < 0:
-            z_axis = -z_axis
+        x_axis = np.cross(z_axis, axis)
+        if x_axis[0] > 0:
+            x_axis = -x_axis
         
         y_axis = np.cross(z_axis, x_axis)
+        # Do svd to find the closest rotation matrix
         R = np.array([x_axis, y_axis, z_axis]).T
         u, s, vh = np.linalg.svd(R, full_matrices=True)
         s = np.ones((3, ))
@@ -969,6 +1044,8 @@ class TouchGSController(object):
 
         if success:
           sample_coords.append(touch_poses)
+          
+        # sample_coords.append(touch_poses)
 
     # visualization 
     original_mesh = self.get_mesh()
@@ -984,6 +1061,7 @@ class TouchGSController(object):
 
   def board_demo(self):
     """ Board Demo using Aruco Marker"""
+    import pdb; pdb.set_trace()
     poses = self.get_board_touch_poses()
 
     gaussian_splatting_data_dir = "/home/user/Documents/gs_data"
@@ -1024,18 +1102,24 @@ class TouchGSController(object):
 
     pose_cnt = 0
     while pose_cnt < self.num_poses:
-      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
+      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.4)
       joints = self.pose_generator.calcIK(pose) 
 
       # plan reaching the pose
       success = False
       while not success:
         try:
-          success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+          if joints is None:
+            success = False
+            rospy.logwarn("IK Failed, trying another pose")
+            pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.4)
+            joints = self.pose_generator.calcIK(pose) 
+          else:
+            success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
         except: 
           success = False
           rospy.logwarn("Fail to Plan Trajectory")
-          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.6)
+          pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.5)
           joints = self.pose_generator.calcIK(pose) 
 
         # if plan succeeds, we can add the pose as valid
@@ -1268,38 +1352,64 @@ class TouchGSController(object):
     # to get touches near the surface, we need esdf volume to sample poses near the surface
 
     # phase 1. get board pose board 2 baseline
-    # TODO 
-    touch_poses = self.get_board_touch_poses()
-
-    # convert these poses to EE pose
-    ee_poses = list(map(partial(self.convert_pose, "touch", "base_link"), touch_poses))
-
-    # sample uniformly on the board
-    # check the feasibility of the touch poses
-    pose_req = NBVRequest()
-    for pose in ee_poses:
-      
-      joints = self.pose_generator.calcIK(pose) 
-
-      # plan reaching the pose
-      success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
-      if success:
-        pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
-        pose_req.poses.append(pose_msg)
-
-    # call the next best touch pose
-    pose_req.sensor_type = "touch"
-    res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
-    scores = np.array(res.scores)
-    sorted_indices = np.argsort(scores)[::-1]
-    nbt_pose = touch_poses[sorted_indices[0]]
+    touch_poses = self.get_tsdf_touch_poses()
     
-    # do the touch
-    self.touch_pose(nbt_pose, cb_func=partial(self.save_touch_data, gaussian_splatting_data_dir))
+    # for now, take the first pose
+    # nbt_pose = touch_poses[0]
+    
+    # take 25 RANDOM poses and save the touch data
+    # get random 25 indices from the length of the touch poses
+    idxes = np.random.choice(range(len(touch_poses)), 25, replace=False)
+    nbt_random_poses = [touch_poses[i] for i in idxes]
+    for touch_pose in nbt_random_poses:
+      pose = np.zeros(7)
+      pose[:3] = touch_pose[:3, 3]
+      q = Quaternion(matrix=touch_pose[:3, :3])
+      pose[3:] = np.array([q.x, q.y, q.z, q.w])
+      self.touch_pose(pose, cb_func=partial(self.save_touch_data, gaussian_splatting_data_dir))
+    
 
+    # # convert these poses to EE pose
+    # ee_poses = list(map(partial(self.convert_pose, "touch", "base_link"), touch_poses))
+
+    # # sample uniformly on the board
+    # # check the feasibility of the touch poses
+    # pose_req = NBVRequest()
+    # for pose in ee_poses:
+      
+    #   joints = self.pose_generator.calcIK(pose) 
+
+    #   # plan reaching the pose
+    #   success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
+    #   if success:
+    #     pose_msg:PoseStamped = self.convertNumpy2PoseStamped(pose)
+    #     pose_req.poses.append(pose_msg)
+
+    # import pdb; pdb.set_trace()
+    # # call the next best touch pose
+    # pose_req.sensor = "touch"
+    # res: NBVResponse = self.send_req_helper(self.nbv_client, pose_req)
+    # scores = np.array(res.scores)
+    # sorted_indices = np.argsort(scores)[::-1]
+    # nbt_pose = touch_poses[sorted_indices[0]]
+    # do the touch
+    
+    
+
+  def on_press(self, key):
+    try:
+        if key.char == 't':  # Check if 't' key is pressed
+            rospy.loginfo("Stopping Touch")
+            self.end_touch = True
+    except AttributeError:
+        # Handle special keys that do not have a char attribute
+        pass
 
   def run(self):
     """ Run Controller Method to get new views """
+    listener = keyboard.Listener(on_press=self.on_press)
+    listener.start()
+    
     success = self.is_init_success
     self.delete_test_result_param()
 
@@ -1309,18 +1419,15 @@ class TouchGSController(object):
       success &= self.reach_named_position("home")
       
     # Board Demo for the touch sensor
-    # self.get_tsdf_touch_poses()
     # self.board_demo()
 
-    # Phase 1: Vision
     self.vision_phase()
     
-    # self.num_touches_to_add is the amount of touches to add
-
+    # self.build_from_data_folder(self.get_gs_data_dir())
+    # self.get_tsdf_touch_poses()
     # gaussian_splatting_data_dir = self.get_gs_data_dir()
-    
-    # Phase 2: Touch
-    # self.touch_phase('test')
+    # self.touch_phase(gaussian_splatting_data_dir)
+    # self.num_touches_to_add is the amount of touches to adds
 
     return success
 
