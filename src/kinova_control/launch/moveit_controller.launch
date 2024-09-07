@@ -2,6 +2,9 @@
 
     <rosparam file="$(find kinova_control)/config/params.yaml" command="load" />
 
+     <!-- Include the touch sensor transform-->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="knova_dtv2" args="0.0 0.0 0.0607 0 0 -0.7071068 0.7071068 end_effector_link touch" />
+
     <!-- Robot namespace -->
     <arg name="robot_name" default="my_gen3"/>
     <arg name="start_delay_seconds" default="0"/>
@@ -14,8 +17,8 @@
 
     <arg name="save_data" default="True" />
     <arg name="should_collect_test_views" default="False" />
-    <arg name="should_collect_experiment" default="False" />
-    <arg name="starting_views" default="5"/>
+    <arg name="should_collect_experiment" default="True" />
+    <arg name="starting_views" default="8"/>
     <arg name="added_views" default="15"/>
     <arg name="use_touch" default="False"/>
 
@@ -34,7 +37,7 @@
         <param name="starting_views" value="$(arg starting_views)"/>
         <param name="added_views" value="$(arg added_views)"/>
         <param name="should_collect_experiment" value="$(arg should_collect_experiment)"/>
-        <param name="dt_deform_threshold_value" value="120"/>
+        <param name="dt_deform_threshold_value" value="200"/>
         <param name="use_touch" value="$(arg use_touch)"/>
     </node>
 

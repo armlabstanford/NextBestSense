@@ -58,6 +58,9 @@ class VisionNode(object):
         param_filename = osp.join(osp.dirname(osp.abspath(__file__)), "config.yml") 
         self.monocular_depth = MonocularDepth(load_config(param_filename))
         
+        # whether to use SAM2 for depth alignment.
+        self.use_sam = True
+        
         rospy.loginfo("Camera Topic: {}".format(self.CAMERA_TOPIC))
         rospy.loginfo("Depth Camera Topic: {}".format(self.DEPTH_CAMERA_TOPIC))
         rospy.loginfo("Save Data: {}".format(self.save_data))
@@ -194,12 +197,6 @@ class VisionNode(object):
     
     def align_depth(self, depth: np.ndarray, predicted_depth: np.ndarray, 
                     rgb: np.ndarray, use_sam: bool = False) -> np.ndarray:
-        scale, offset = learn_scale_and_offset_raw(predicted_depth, depth)
-        depth_np = (scale * predicted_depth) + offset
-        depth_np[depth_np < 0] = 0
-        
-        first_stage_depth = depth_np
-        
         transform = np.array([
             [1.00000000e+00, 0.00000000e+00, 0.00000000e+00, -0.01],
             [0.00000000e+00, 1.00000000e+00, 0.00000000e+00, 0.09],
@@ -213,9 +210,14 @@ class VisionNode(object):
             [  0.      ,   0.      ,   1.      ]
         ])
         rs_depth = warp_image(depth, K, transform[:3, :3], transform[:3, 3])
+        scale, offset = learn_scale_and_offset_raw(predicted_depth, rs_depth)
+        depth_np = (scale * predicted_depth) + offset
+        depth_np[depth_np < 0] = 0
+        first_stage_depth = depth_np
+        
         
         # perform SAM2 semantic alignment if use_sam is True
-        if use_sam:
+        if self.use_sam:
             # Save the image, depth, and predicted depth
             img_path = osp.join(self.save_data_dir, "sam2_img.png")
             depth_path = osp.join(self.save_data_dir, "sam2_depth.png")
@@ -253,7 +255,7 @@ class VisionNode(object):
         
         res = TriggerResponse()
         res.success = True
-        rospy.sleep(8)
+        rospy.sleep(3)
 
         # grab the image message
         img: Image = rospy.wait_for_message(self.CAMERA_TOPIC, Image)
@@ -306,7 +308,7 @@ class VisionNode(object):
         plt.imsave(full_mde_path, predicted_depth, cmap='viridis')
         
         # align depths 
-        depth_np, rs_depth, first_stage_depth = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=True)
+        depth_np, rs_depth, first_stage_depth = self.align_depth(realsense_depth, predicted_depth, img_np, use_sam=self.use_sam)
         
         # save fig of the depth image
         plt.figure()
@@ -478,7 +480,7 @@ class VisionNode(object):
             mde_depth_path = osp.join(self.gs_training_dir, "images", "{:04d}_mde_depth.png".format(img_idx))
             
             # run sam2 again if is challenge object
-            if not self.depth_aligned_complete[img_idx]:
+            if not self.depth_aligned_complete[img_idx] and self.use_sam:
                 is_challenge_object_str = "--is_challenge_object" if self.is_challenge_object else ""
                 rel_mask_path = osp.join("masks", "{:04d}.png".format(img_idx))
                 full_mask_path = osp.join(self.gs_training_dir, rel_mask_path)
@@ -491,8 +493,8 @@ class VisionNode(object):
                             --original_mde_depth_path {mde_depth_path}""".replace('\n', ''))
                 
                 self.depth_aligned_complete[img_idx] = True
-                depth_np = cv2.imread(osp.join(self.save_data_dir, "mde_depth_aligned.png"), cv2.IMREAD_UNCHANGED).astype(np.uint16)
-                cv2.imwrite(depth_path, depth_np)
+                depth_np = cv2.imread(osp.join(self.gs_training_dir, "images", "mde_depth_aligned.png"), cv2.IMREAD_UNCHANGED).astype(np.uint16)
+                cv2.imwrite(aligned_depth_path, depth_np)
         
         return self.gs_training_dir
     

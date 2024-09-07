@@ -43,7 +43,7 @@ def build_model(cfg):
         return model
         
     elif model_name == MODEL_LIST['METRIC_3D']:
-        model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_large', pretrain=True)
+        model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_small', pretrain=True)
         model.cuda().eval()
         return model
     else:

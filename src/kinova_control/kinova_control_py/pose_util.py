@@ -203,7 +203,8 @@ class RandomPoseGenerator(PoseSolver):
     
     def sampleInSphere(self, center_pos,
                        min_radius = 0.01, max_radius = 0.1,
-                     min_phi = 0., max_phi = np.pi / 4,
+                     min_phi = 0, max_phi = np.pi / 3,
+                    #  min_phi = np.pi / 4., max_phi = np.pi / 2,
                      min_theta = np.pi / 2, max_theta = 3 * np.pi / 2):
       """ Sample the pose within the sphere """
 

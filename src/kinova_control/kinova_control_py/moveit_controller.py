@@ -59,9 +59,11 @@ else:
 from pynput import keyboard
 
 TOPVIEW = [0.656, 0.002, 0.434, 0.707, 0.707, 0., 0.]
-# OBJECT_CENTER = np.array([0.4, 0., 0.1])
+OBJECT_CENTER = np.array([0.4, 0., 0.1])
 # OBJECT_CENTER = np.array([0.4, 0.05, 0.1])
-OBJECT_CENTER = np.array([0.55, 0.00, 0.3])
+# OBJECT_CENTER = np.array([0.6, 0.00, 0.3]) bunny
+# OBJECT_CENTER = np.array([0.6, 0.00, 0.25])
+
 
 BOX_DIMS = (0.15, 0.15, 0.15)
 # BOX_DIMS = (0.07, 0.07, 0.01)
@@ -79,7 +81,7 @@ EXP_POSES = {
   "candidate_poses": []
 }
 
-PICKLE_PATH_FULL = 'EXP_POSES.pkl'
+PICKLE_PATH_FULL = '/home/user/NextBestSense/PRISM_TABLE_EXP_POSES.pkl'
 
 def mask_filter(vertices, gaussian_data_dir):
   """ Mask Filter using the SAM2 Data 
@@ -352,7 +354,7 @@ class TouchGSController(object):
   
   def get_gs_data_dir(self):
     """ Get the GS Data Directory """
-    return "/home/user/NextBestSense/data/object_2"
+    return "/home/user/NextBestSense/data/ridges"
     
     req = TriggerRequest()
     res = self.get_gs_data_dir_client(req)
@@ -975,7 +977,7 @@ class TouchGSController(object):
 
     # random select 100 faces
     # increase the number of faces to get more samples, when there is no touches
-    select_face_num = 400
+    select_face_num = 100
     distance_along_normal = 0.03
 
     face_idx = np.arange(normals.shape[0])
@@ -1053,7 +1055,7 @@ class TouchGSController(object):
     for transform in sample_coords:
       sample_coord = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.02, origin=[0., 0, 0])
       sample_coord.transform(transform)
-      coords.append(sample_coord)
+      # coords.append(sample_coord)
     
     o3d.visualization.draw_geometries([original_mesh, *coords])
 
@@ -1102,7 +1104,7 @@ class TouchGSController(object):
 
     pose_cnt = 0
     while pose_cnt < self.num_poses:
-      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.4)
+      pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.5)
       joints = self.pose_generator.calcIK(pose) 
 
       # plan reaching the pose
@@ -1112,7 +1114,7 @@ class TouchGSController(object):
           if joints is None:
             success = False
             rospy.logwarn("IK Failed, trying another pose")
-            pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.2, 0.4)
+            pose = self.pose_generator.sampleInSphere(OBJECT_CENTER, 0.3, 0.5)
             joints = self.pose_generator.calcIK(pose) 
           else:
             success, trajectory, planning_time, err_code = self.arm_group.plan(joints)
@@ -1206,6 +1208,7 @@ class TouchGSController(object):
       rospy.loginfo("Writing EXP_POSES")
       # write pickle file
       with open(PICKLE_PATH_FULL, "wb") as f:
+        print(PICKLE_PATH_FULL)
         pickle.dump(EXP_POSES, f)
 
   def call_add_view_client(self):

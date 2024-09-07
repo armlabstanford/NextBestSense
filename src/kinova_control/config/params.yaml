@@ -1,4 +1,4 @@
-view_selection_method: "fisher"
+view_selection_method: "random"
 views_to_add: 10
 
 touches_to_add: 10
