@@ -9,7 +9,8 @@ import torch
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
-
+from scipy.optimize import lsq_linear
+# import cvxpy as cp
 
 
 from sam2.build_sam import build_sam2
@@ -40,6 +41,48 @@ def learn_scale_and_offset_raw(dense_depth, sparse_depth):
     x, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     scale, offset = x
     return scale, offset
+
+
+def learn_scale_and_offset_raw_scale_pos(dense_depth, sparse_depth):
+    dense_depth_flat = dense_depth.flatten()
+    sparse_depth_flat = sparse_depth.flatten()
+
+    valid_mask = sparse_depth_flat > 0
+    dense_depth_valid = dense_depth_flat[valid_mask]
+    sparse_depth_valid = sparse_depth_flat[valid_mask]
+
+    A = np.vstack([dense_depth_valid, np.ones_like(dense_depth_valid)]).T
+    b = sparse_depth_valid
+
+    # Use lsq_linear to enforce non-negative scale
+    result = lsq_linear(A, b, bounds=([0, -np.inf], [np.inf, np.inf]))
+    
+    scale, offset = result.x
+    return scale, offset
+
+# def learn_scale_and_offset_raw(dense_depth, sparse_depth):
+#     dense_depth_flat = dense_depth.flatten()
+#     sparse_depth_flat = sparse_depth.flatten()
+
+#     valid_mask = sparse_depth_flat > 0
+#     dense_depth_valid = dense_depth_flat[valid_mask]
+#     sparse_depth_valid = sparse_depth_flat[valid_mask]
+
+#     A = np.vstack([dense_depth_valid, np.ones_like(dense_depth_valid)]).T
+#     b = sparse_depth_valid
+
+#     # Define variables for scale and offset
+#     scale = cp.Variable(nonneg=True)  # Constrain scale to be non-negative
+#     offset = cp.Variable()
+
+#     # Objective: minimize the squared error
+#     objective = cp.Minimize(cp.sum_squares(A @ cp.hstack([scale, offset]) - b))
+
+#     # Problem definition and solving
+#     problem = cp.Problem(objective)
+#     problem.solve()
+
+    # return scale.value, offset.value
 
 def learn_scale_raw(dense_depth, sparse_depth):
     dense_depth_flat = dense_depth.flatten()
@@ -115,7 +158,6 @@ class SAM2(SAM2AutomaticMaskGenerator):
 
         mde_depth = cv2.imread(mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
         real_depth = cv2.imread(real_depth, cv2.IMREAD_UNCHANGED) / 1000.0
-        
         # get difference between the two depths' filtered 0s
         sparse_mask = real_depth > 0
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
@@ -133,12 +175,10 @@ class SAM2(SAM2AutomaticMaskGenerator):
             mask = bool_mask.astype(np.uint8)
             # reshape mask to image size
             mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
-            
             # perform alignment on mask
             mde_mask = mde_depth[bool_mask]
             real_mask = real_depth[bool_mask]
             scale, offset = learn_scale_and_offset_raw(mde_mask, real_mask)
-            
             # update mde
             mde_depth[bool_mask] = mde_depth[bool_mask] * scale + offset
             # remove negative values
@@ -167,7 +207,20 @@ class SAM2(SAM2AutomaticMaskGenerator):
             mde_depth[mask] = old_mde_depth[mask] * scale + offset
             mde_depth[mde_depth < 0] = 0
             
-
+        if object_mask_path is not None:
+            mask = cv2.imread(object_mask_path, cv2.IMREAD_UNCHANGED)
+            mask = mask.astype(bool)
+            old_mde_depth = cv2.imread(original_mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
+            
+            # get median point of the mask
+            mask = mask.astype(bool)
+            
+            old_mde_mask = old_mde_depth[mask]
+            real_mask = real_depth[mask]
+            scale, offset = learn_scale_and_offset_raw_scale_pos(old_mde_mask, real_mask)
+            mde_depth[mask] = old_mde_depth[mask] * scale + offset
+            mde_depth[mde_depth < 0] = 0
+            
         diff = np.mean(np.abs(mde_depth[sparse_mask] - real_depth[sparse_mask]))
         
         img_diff = np.abs(mde_depth - real_depth)

@@ -3,8 +3,8 @@ import cv2
 import json as js
 import numpy as np
 
-JSON_PATH = 'data/prism/transforms.json'
-ROOT = 'data/prism/'
+JSON_PATH = 'data/2024-09-06-03-17-00/transforms.json'
+ROOT = 'data/2024-09-06-03-17-00/'
 if __name__ == "__main__":
     # read json file
     with open(JSON_PATH) as f:
@@ -52,6 +52,13 @@ if __name__ == "__main__":
         
         # integrate rgbd image into TSDF volume
         volume.integrate(rgbd, intrinsic, extrinsic)
+        
+        
+    mesh = volume.extract_triangle_mesh()
+    mesh.compute_vertex_normals()  # Compute normals for better visualization
+    
+    # Visualize the mesh
+    o3d.visualization.draw_geometries([mesh])
     
     point_cloud = volume.extract_point_cloud()
     
