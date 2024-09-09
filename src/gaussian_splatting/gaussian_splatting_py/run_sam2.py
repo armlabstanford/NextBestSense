@@ -207,7 +207,7 @@ class SAM2(SAM2AutomaticMaskGenerator):
             mde_depth[mask] = old_mde_depth[mask] * scale + offset
             mde_depth[mde_depth < 0] = 0
             
-        if object_mask_path is not None:
+        if object_mask_path is not None and not is_challenge_object:
             mask = cv2.imread(object_mask_path, cv2.IMREAD_UNCHANGED)
             mask = mask.astype(bool)
             old_mde_depth = cv2.imread(original_mde_depth_path, cv2.IMREAD_UNCHANGED) / 1000.0
