@@ -1,0 +1,6 @@
+geometry_msgs/PoseStamped[] poses
+string sensor
+---
+float64[] scores
+bool success
+string message

@@ -1,0 +1,4 @@
+float64[] scores
+---
+bool success
+string message

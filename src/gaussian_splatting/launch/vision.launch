@@ -1,0 +1,21 @@
+<launch>
+
+    <arg name="image_topic" default="/image" />
+    <arg name="cam_info_topic" default="/cam_info" />
+    <arg name="depth_image_topic" default="/depth_image" />
+    <arg name="depth_cam_info_topic" default="/depth_cam_info" />
+    <arg name="save_data" default="True" />
+    <arg name="should_collect_test_views" default="False" />
+
+    <!-- Launch the example in that namespace -->
+    <node name="vision_node" pkg="gaussian_splatting" type="vision_node.py" output="screen">
+        <param name="image_topic" value="$(arg image_topic)"/>
+        <param name="cam_info_topic" value="$(arg cam_info_topic)"/>
+        <param name="depth_image_topic" value="$(arg depth_image_topic)"/>
+        <param name="depth_cam_info_topic" value="$(arg depth_cam_info_topic)"/>
+        <param name="save_data" value="$(arg save_data)"/>
+        <param name="should_collect_test_views" value="$(arg should_collect_test_views)"/>
+        <param name="model_param_path" value="/home/user/kinova/NextBestSense/src/gaussian_splatting/gaussian_splatting_py/config.yml"/>
+    </node>
+
+</launch>
