@@ -1,28 +1,114 @@
-# TouchGS 2.0: Next Best Sense
+# 🦾 Next Best Sense: Guiding Vision and Touch with FisherRF for 3D Gaussian Splatting
 
-ARMLab code for Next Best Sense work in uncertainty-guided view and touch exploration.
+###  [Matthew Strong*](https://peasant98.github.io/), [Boshu Lei*](https://scholar.google.com/citations?user=Jv88S-IAAAAJ&hl=en/), [Aiden Swann](https://aidenswann.com/), [Wen Jiang](https://jiangwenpl.github.io/), [Kostas Daniilidis](https://www.cis.upenn.edu/~kostas/), [Monroe Kennedy III](https://monroekennedy3.com/)
+
+_Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025_
+
+<!-- insert image here -->
+
+![image](https://github.com/user-attachments/assets/2c2f178c-f5a5-4a24-ac4d-d574e7ff2d2d)
 
 
-## Quick Start
+[![Project](https://img.shields.io/badge/Project_Page-Touch_GS-green)](https://touch-gs.github.io/)
+[![ArXiv](https://img.shields.io/badge/Arxiv-Touch_GS-red)](https://arxiv.org/abs/2403.09875) 
 
 
-1. Run the Docker Image
+This repo houses the core code for Next Best Sense.
 
-2. Install Nerfstudio and other dependencies
 
-3. Setup ROS Workspace
+## Quick Start and Setup
 
-4. Running the code
 
-    - To run the ROS Kortex packages and DT package:
+The pipeline has been tested on Ubuntu 22.04.
 
-    ```sh
-    roslaunch ros_kortex kortex.launch
-    ```
 
-    - To run the E2E example:
+### Requirements:
 
-    ```sh
-    roslaunch ros_kortex moveit_controller.launch
+- CUDA 11+
+- Python 3.8+
+- Conda or Mamba (optional)
 
-    ```
+### Dependencies (from Nerfstudio)
+
+Install PyTorch with CUDA (this repo has been tested with CUDA 11.7 and CUDA 11.8) and [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn).
+`cuda-toolkit` is required for building `tiny-cuda-nn`.
+
+For CUDA 11.8:
+
+```bash
+conda create --name touch-gs python=3.8
+conda activate touch-gs
+
+pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
+
+conda install -c "nvidia/label/cuda-11.8.0" cuda-toolkit
+pip install ninja git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+```
+
+See [Dependencies](https://github.com/nerfstudio-project/nerfstudio/blob/main/docs/quickstart/installation.md#dependencies)
+in the Installation documentation for more.
+
+**Repo Cloning**
+To clone the repo, since we have submodules, run the following command:
+
+```bash
+git clone --recurse-submodules https://github.com/armlabstanford/Touch-GS
+```
+
+## Installing the GPIS code
+
+We have implemented our own GPIS (Gaussian Process Implicit Surface) from scratch [here](https://github.com/armlabstanford/GPIS)!
+
+Please follow the steps to install the repo there.
+
+## Install Our Version of Nerfstudio
+
+You can find more detailed instructions in Nerfstudio's README.
+
+
+```bash
+# install nerfstudio
+bash install_ns.sh
+```
+
+## Getting Touch-GS Data Setup and Training
+
+We have made an end-to-end pipeline that will take care of setting up the data, training, and evaluating our method. Note that we will release the code for running the ablations (which includes the baselines) soon!
+
+To prepare each scene:
+
+0. Install Python packages
+
+```sh
+pip install -r requirements.txt
+```
+
+
+1. Real Bunny Scene (our method)
+
+```sh
+bash scripts/train_bunny_real.sh
+```
+
+2. Mirror Scene
+
+```sh
+bash scripts/train_mirror_data.sh
+```
+
+3. Prism Scene
+
+```sh
+bash scripts/train_block_data.sh
+```
+
+4. Bunny Blender Scene (processing to a unified format in progress)
+
+## Get Renders
+
+The renders on the test set are created in the main script under `exp-name-renders` within `touch-gs-data`.
+
+
+## Get Rendered Video
+
+You can get rendered videos with a custom camera path detailed [here](https://docs.nerf.studio/quickstart/first_nerf.html#render-video). This is how we were able to get our videos on our website.
