@@ -12,7 +12,9 @@ _Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025
 [![ArXiv](https://img.shields.io/badge/Arxiv-Next_Best_Sense-red)](https://arxiv.org/abs/2410.04680) 
 
 
-This repo houses the core code for Next Best Sense. We exclusively use Docker for this work, which allows for self-contained code that won't mess up the host OS. Steps coming soon!
+This repo houses the core code for Next Best Sense. We exclusively use Docker for this work, which allows for self-contained code that won't mess up the host OS.
+
+
 
 ## Quick Start and Setup
 
@@ -24,13 +26,14 @@ The pipeline has been tested on Ubuntu 22.04.
 - Python 3.8+
 - ROS1 Melodic
 - Conda or Mamba (optional)
+- [Kinova Gen3 robot](https://www.kinovarobotics.com/product/gen3-robots#ProductSpecs) (7 DoF)
 
 ### Dependencies (from Nerfstudio)
 
 Install PyTorch with CUDA (this repo has been tested with CUDA 11.8 and CUDA 12.1).
 
 For CUDA 11.8:
-wak
+
 ```bash
 conda create --name touch-gs python=3.8
 conda activate touch-gs
@@ -43,13 +46,25 @@ conda install -c "nvidia/label/cuda-11.8.0" cuda-toolkit
 See [Dependencies](https://github.com/nerfstudio-project/nerfstudio/blob/main/docs/quickstart/installation.md#dependencies)
 in the Installation documentation for more.
 
+
 **Repo Cloning**
 This repository should be used as a group of packages for a ROS1 workspace for controlling a Kinova arm.
 
 
 ## Install Our Version of Nerfstudio
 
-You can find more detailed instructions in our custom version of Nerfstudio, which will be released soon!
+We note that we have our own version of Nerfstudio, which supports active learning, which can be found [here](https://github.com/JiangWenPL/FisherRF-ns).
+
+To install, the steps are:
+
+```bash
+
+git clone https://github.com/JiangWenPL/FisherRF-ns
+cd FisherRF-ns
+
+# install the package in editable mode for easy 
+python3 -m pip install -e . -v
+```
 
 
 
@@ -63,7 +78,9 @@ catkin build
 source install/setup.bash
 ```
 
-Then, run the launch file, which will open the controller and vision node.
+Then, run the launch file, which will open the controller and vision node. Assuming you have our version of Nerfstudio installed, this will work as follows:
+
+1. Run Kinova pipeline.
 
 
 ```sh
