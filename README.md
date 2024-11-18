@@ -18,9 +18,15 @@ This repo houses the core code for Next Best Sense. We exclusively use Docker fo
 
 ## Quick Start and Setup
 
-The pipeline has been tested on Ubuntu 22.04.
+The pipeline has been tested on Ubuntu 22.04. To avoid installation pains and dependency conflicts, we have a publicly available Dockerfile that includes everything [here](https://hub.docker.com/r/peasant98/active-touch-gs).
 
-### Requirements:
+To pull from Docker, run
+
+```sh
+docker pull peasant98/active-touch-gs:latest
+```
+
+### Requirements (Not Using Docker):
 
 - CUDA 11+ and a GPU with at least 16GB VRAM
 - Python 3.8+
