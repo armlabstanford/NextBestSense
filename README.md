@@ -24,7 +24,7 @@ The pipeline has been tested on Ubuntu 22.04.
 
 - CUDA 11+ and a GPU with at least 16GB VRAM
 - Python 3.8+
-- ROS1 Melodic
+- ROS1 Noetic
 - Conda or Mamba (optional)
 - [Kinova Gen3 robot](https://www.kinovarobotics.com/product/gen3-robots#ProductSpecs) (7 DoF)
 
