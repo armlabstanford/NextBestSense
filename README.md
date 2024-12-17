@@ -56,7 +56,7 @@ source devel/setup.bash
 # done!!
 ```
 
-
+You can then skip to the "Getting Next Best Sense Setup and Training" step
 
 
 ### Requirements (Not Using Docker):
@@ -66,6 +66,7 @@ source devel/setup.bash
 - ROS1 Noetic
 - Conda or Mamba (optional)
 - [Kinova Gen3 robot](https://www.kinovarobotics.com/product/gen3-robots#ProductSpecs) (7 DoF)
+- Wired connection to the Kinova Robot
 
 ### Dependencies (from Nerfstudio)
 
@@ -109,6 +110,9 @@ python3 -m pip install -e . -v
 
 ## Getting Next Best Sense Setup and Training
 
+<img src="https://github.com/user-attachments/assets/42742cae-9609-40ce-8e6c-b6cd35f7f31a" alt="image" style="width:600px;">
+
+
 First, build the workspace (locally or within the Docker container):
 
 ```sh
@@ -116,6 +120,10 @@ First, build the workspace (locally or within the Docker container):
 catkin build
 source install/setup.bash
 ```
+
+
+Make sure you are connected to the Kinova robot at the desired IP
+
 
 Then, run the launch file, which will open the controller and vision node. Assuming you have our version of Nerfstudio installed, this will work as follows:
 
