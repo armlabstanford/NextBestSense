@@ -12,14 +12,15 @@ _Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025
 [![ArXiv](https://img.shields.io/badge/Arxiv-Next_Best_Sense-red)](https://arxiv.org/abs/2410.04680) 
 
 
-This repo houses the core code for Next Best Sense, the first work that autonomously and intelligently creates a scene for robot manipulators in Gaussian Splatting! We exclusively use Docker for this work, which allows for self-contained code.
+This repo houses the core code for Next Best Sense, the first work that autonomously and intelligently creates a scene for robot manipulators in Gaussian Splatting! Avoid the manually selecting poses, and let the robot do it for you in few views. 
+
 
 ![image](https://github.com/user-attachments/assets/c1361381-66ef-4cb9-a3ca-0bf815b86a12)
 
 
 ## Quick Start and Setup
 
-The pipeline has been tested on Ubuntu 22.04. To avoid installation pains and dependency conflicts, we have a publicly available Dockerfile that includes everything [here](https://hub.docker.com/r/peasant98/active-touch-gs).
+We exclusively use Docker for this work, which allows for self-contained code. The pipeline has been tested on Ubuntu 22.04. To avoid installation pains and dependency conflicts, we have a publicly available Dockerfile that includes everything [here](https://hub.docker.com/r/peasant98/active-touch-gs).
 
 To pull from Docker, run
 
