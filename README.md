@@ -5,7 +5,7 @@
 _Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025_
 
 
-![image](https://github.com/user-attachments/assets/e35feabc-53bb-457b-81ee-c5c61dcb4dba)
+<img src="https://github.com/user-attachments/assets/e35feabc-53bb-457b-81ee-c5c61dcb4dba" alt="image" style="width:600px;">
 
 
 [![Project](https://img.shields.io/badge/Project_Page-Next_Best_Sense-blue)](https://armlabstanford.github.io/next-best-sense)
@@ -20,13 +20,44 @@ This repo houses the core code for Next Best Sense, the first work that autonomo
 
 ## Quick Start and Setup
 
-We exclusively use Docker for this work, which allows for self-contained code. The pipeline has been tested on Ubuntu 22.04. To avoid installation pains and dependency conflicts, we have a publicly available Dockerfile that includes everything [here](https://hub.docker.com/r/peasant98/active-touch-gs).
+We exclusively use Docker for this work, which allows for self-contained code. The pipeline has been tested on Ubuntu 22.04 and requires a GPU (3080+ 16+ GB VRAM). To avoid installation pains and dependency conflicts, we have a publicly available Dockerfile that includes everything [here](https://hub.docker.com/r/peasant98/active-touch-gs).
 
-To pull from Docker, run
+To pull from Docker, run the following:
 
 ```sh
 docker pull peasant98/active-touch-gs:latest
 ```
+
+To mount our code _within_ the Docker container, clone it as follows:
+
+```sh
+git clone https://github.com/armlabstanford/NextBestSense
+
+# clone fisherrf integrated into nerfstudio
+git clone https://github.com/JiangWenPL/FisherRF-ns
+cd FisherRF-ns/ && git clone https://github.com/JiangWenPL/modified-diff-gaussian-rasterization-w-depth
+
+# run docker in privileged mode, interactive, expose the nerfstudio port, allow for graphics, and use all gpus! Recommended to put this in an alias
+docker run --privileged -it --rm -p 7007:7007         --name nbs         --hostname nbs         --volume=/tmp/.X11-unix:/tmp/.X11-unix \\
+-v `pwd`/FisherRF-ns:/home/user/FisherRF-ns -v `pwd`/NextBestSense:/home/user/NextBestSense         --device=/dev/dri:/dev/dri \\
+--device=/dev/ttyUSB0:/dev/ttyUSB0         --env="DISPLAY=$DISPLAY"         -e "TERM=xterm-256color"         --cap-add SYS_ADMIN --device /dev/fuse \\
+ --gpus all -it         peasant98/active-touch-gs:latest         bash
+```
+
+To install the local versions of the Nerfstudio packages:
+
+```
+cd FisherRF-ns/modified-diff-gaussian-rasterization-w-depth/ && pip install -e . -v
+cd .. && pip install -e .
+
+cd .. && cd NextBestSense/ && catkin build
+source devel/setup.bash
+
+# done!!
+```
+
+
+
 
 ### Requirements (Not Using Docker):
 
@@ -78,7 +109,7 @@ python3 -m pip install -e . -v
 
 ## Getting Next Best Sense Setup and Training
 
-First, build the workspace:
+First, build the workspace (locally or within the Docker container):
 
 ```sh
 # be outside the NextBestSense dir (ROS workspace)
