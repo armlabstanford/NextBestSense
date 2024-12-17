@@ -12,7 +12,7 @@ _Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025
 [![ArXiv](https://img.shields.io/badge/Arxiv-Next_Best_Sense-red)](https://arxiv.org/abs/2410.04680) 
 
 
-This repo houses the core code for Next Best Sense. We exclusively use Docker for this work, which allows for self-contained code that won't mess up the host OS.
+This repo houses the core code for Next Best Sense. We exclusively use Docker for this work, which allows for self-contained code.
 
 
 
