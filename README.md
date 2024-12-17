@@ -7,6 +7,11 @@ _Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025
 
 <img src="https://github.com/user-attachments/assets/e35feabc-53bb-457b-81ee-c5c61dcb4dba" alt="image" style="width:600px;">
 
+TODO:
+
+- Customization of launch file
+- How to autonomously select new touches. We use the [Touch-GS dataset](https://github.com/armlabstanford/touch-gs-data) to validate our method.
+
 
 [![Project](https://img.shields.io/badge/Project_Page-Next_Best_Sense-blue)](https://armlabstanford.github.io/next-best-sense)
 [![ArXiv](https://img.shields.io/badge/Arxiv-Next_Best_Sense-red)](https://arxiv.org/abs/2410.04680) 
