@@ -2,7 +2,7 @@
 
 ###  [Matthew Strong*](https://peasant98.github.io/), [Boshu Lei*](https://scholar.google.com/citations?user=Jv88S-IAAAAJ&hl=en/), [Aiden Swann](https://aidenswann.com/), [Wen Jiang](https://jiangwenpl.github.io/), [Kostas Daniilidis](https://www.cis.upenn.edu/~kostas/), [Monroe Kennedy III](https://monroekennedy3.com/)
 
-_Submitted to IEEE International Conference on Robotics & Automation (ICRA) 2025_
+_To appear to IEEE International Conference on Robotics & Automation (ICRA) 2025_
 
 
 <img src="https://github.com/user-attachments/assets/e35feabc-53bb-457b-81ee-c5c61dcb4dba" alt="image" style="width:600px;">
