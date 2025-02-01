@@ -10,7 +10,7 @@ _To appear to IEEE International Conference on Robotics & Automation (ICRA) 2025
 TODO:
 
 - Customization of launch file
-- How to autonomously select new touches. We use the [Touch-GS dataset](https://github.com/armlabstanford/touch-gs-data) to validate our method.
+- How to autonomously select new touches. We use the [Touch-GS dataset](https://github.com/armlabstanford/touch-gs-data) to validate our method. In future work, we plan to integrate real touches in real time.
 
 
 [![Project](https://img.shields.io/badge/Project_Page-Next_Best_Sense-blue)](https://armlabstanford.github.io/next-best-sense)
@@ -42,18 +42,26 @@ git clone https://github.com/armlabstanford/NextBestSense
 git clone https://github.com/JiangWenPL/FisherRF-ns
 cd FisherRF-ns/ && git clone https://github.com/JiangWenPL/modified-diff-gaussian-rasterization-w-depth
 
+cd ..
+
 # run docker in privileged mode, interactive, expose the nerfstudio port, allow for graphics, and use all gpus! Recommended to put this in an alias
 docker run --privileged -it --rm -p 7007:7007         --name nbs         --hostname nbs         --volume=/tmp/.X11-unix:/tmp/.X11-unix \\
--v `pwd`/FisherRF-ns:/home/user/FisherRF-ns -v `pwd`/NextBestSense:/home/user/NextBestSense         --device=/dev/dri:/dev/dri \\
+-v `pwd`/FisherRF-ns:/home/user/FisherRF-ns -v `pwd`/NextBestSense:/home/user/NextBestSense  \\
 --device=/dev/ttyUSB0:/dev/ttyUSB0         --env="DISPLAY=$DISPLAY"         -e "TERM=xterm-256color"         --cap-add SYS_ADMIN --device /dev/fuse \\
  --gpus all -it         peasant98/active-touch-gs:latest         bash
+
+# install some packages in the Dockerfile
+sudo apt install libglm-dev
+
 ```
 
-To install the local versions of the Nerfstudio packages:
+To install the local versions of the Nerfstudio packages (within Docker container) and build the packagee:
 
 ```
 cd FisherRF-ns/modified-diff-gaussian-rasterization-w-depth/ && pip install -e . -v
 cd .. && pip install -e .
+rm -rf ~/.catkin_tools
+sudo apt install ros-noetic-kdl-parser-py
 
 cd .. && cd NextBestSense/ && catkin build
 source devel/setup.bash
@@ -61,7 +69,7 @@ source devel/setup.bash
 # done!!
 ```
 
-You can then skip to the "Getting Next Best Sense Setup and Training" step
+You can then skip to the "Getting Next Best Sense Training" step
 
 
 ### Requirements (Not Using Docker):
@@ -113,7 +121,7 @@ python3 -m pip install -e . -v
 
 
 
-## Getting Next Best Sense Setup and Training
+## Getting Next Best Sense Setup
 
 <img src="https://github.com/user-attachments/assets/42742cae-9609-40ce-8e6c-b6cd35f7f31a" alt="image" style="width:600px;">
 
@@ -121,10 +129,13 @@ python3 -m pip install -e . -v
 First, build the workspace (locally or within the Docker container):
 
 ```sh
-# be outside the NextBestSense dir (ROS workspace)
+# be inside the NextBestSense dir (ROS workspace)
+cd NextBestSense
 catkin build
-source install/setup.bash
+source devel/setup.bash
 ```
+
+## Getting Next Best Sense Training
 
 
 Make sure you are connected to the Kinova robot at the desired IP
@@ -140,7 +151,6 @@ roslaunch kinova_control moveit_controller.launch
 ```
 
 We have made an end-to-end pipeline that will take care of setting up the data, training, and evaluating our method. Note that we will release the code for running the ablations (which includes the baselines) soon!
-
 
 
 
